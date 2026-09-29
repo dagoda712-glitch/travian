@@ -1,0 +1,70 @@
+name: Travian 記錄與自動升級（Playwright + session cache 版）
+
+on:
+  schedule:
+    # UTC。每 30 分鐘一次；GitHub 高峰時可能延遲幾分鐘。
+    # 只在 UTC 0~16 點、23 點觸發，跳過 UTC 17~23 點（= 台灣 01:00~07:00 安靜時段），
+    # 省下這 6 小時每 30 分鐘白跑一次「裝完環境才發現不動作」的浪費。
+    - cron: "*/30 0-16,23 * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: travian
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      # 快取 Playwright 下載的瀏覽器核心（Chromium/FFmpeg 等，約 300MB）。
+      # playwright install 本身會自動偵測本機是否已有對應版本，
+      # cache 命中時會直接跳過下載，不需要額外的條件判斷。
+      - name: 還原 Playwright 瀏覽器快取
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-browsers-${{ hashFiles('requirements.txt') }}
+
+      - name: 安裝 Playwright + Chromium
+        run: |
+          pip install playwright
+          playwright install --with-deps chromium
+
+      # 每一輪都會存一份新的（key 帶 run_id），同時用 restore-keys
+      # 模糊比對回「最近一次成功」的那份，讓 session 狀態能接續下去。
+      - name: 還原上一輪的 session 狀態
+        uses: actions/cache@v4
+        with:
+          path: travian_state.json
+          key: travian-state-${{ github.run_id }}
+          restore-keys: travian-state-
+
+      - name: 記錄村莊數據 + 自動升級資源田
+        env:
+          TRAVIAN_BASE_URL: ${{ secrets.TRAVIAN_BASE_URL }}
+          TRAVIAN_SEED_COOKIE: ${{ secrets.TRAVIAN_SEED_COOKIE }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+          DRY_RUN: "0"          # 0為目前為正式模式，會真的送出升級請求
+        #run: python travian_ci_run.py
+        run: python debug_login_flow.py
+        #run: python debug_village_buildings.py
+
+      - name: 上傳診斷用的原始 HTML（debug_html/）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-html
+          path: debug_html/
+          if-no-files-found: ignore
+          retention-days: 3

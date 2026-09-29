@@ -93,7 +93,33 @@ def log_action(row: list):
         ws.append_row(row, value_input_option="USER_ENTERED")
     except Exception as e:
         print(f"寫入 Actions 分頁失敗（不影響升級）: {e!r}")
-
+      
+def disable(reason: str):
+    """偵測到 session / Cookie 失效等需要人工介入的狀況時呼叫：
+    把 Config 的 enabled 設成 FALSE，讓之後每一輪一讀到 cfg 就直接跳過，
+    不會再嘗試登入、也不會每 30 分鐘重複失敗。要恢復請手動把 enabled 改回 TRUE。
+    沒有連 Sheet 時沒辦法持久化，下一輪還是會照樣重試。"""
+    T.notify(reason)
+    if not _has_sheet():
+        print("沒有連 Google Sheet，無法自動停用，下一輪還會再試一次")
+        return
+    from gspread.exceptions import WorksheetNotFound
+    try:
+        sh = _sheet()
+        try:
+            ws = sh.worksheet("Config")
+        except WorksheetNotFound:
+            ws = sh.add_worksheet("Config", 10, 2)
+        rows = ws.get_all_values()
+        for i, row in enumerate(rows, start=1):
+            if row and row[0].strip().lower() == "enabled":
+                ws.update(range_name=f"B{i}", values=[["FALSE"]])
+                break
+        else:
+            ws.append_row(["enabled", "FALSE"])
+        print("已將 Config 的 enabled 設為 FALSE，排程會自動跳過，直到手動改回 TRUE")
+    except Exception as e:
+        print(f"嘗試寫入 Config 停用失敗（不影響本輪判定為失敗）: {e!r}")
 
 def _hours(sec):
     return round(sec / 3600, 1) if sec is not None else None

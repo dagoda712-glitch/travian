@@ -129,7 +129,7 @@ def main() -> int:
                 msg = "cache 的 session 已失效，且沒有設定 TRAVIAN_SEED_COOKIE 可以救援，請設定後重跑"
             else:
                 msg = "抓到的不是村莊頁：種子 Cookie 也已失效，請重新登入複製 Cookie 更新 TRAVIAN_SEED_COOKIE"
-            T.notify(msg)
+            R.disable(msg)
             browser.close()
             return 1
 

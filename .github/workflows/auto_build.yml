@@ -55,7 +55,7 @@ jobs:
           TRAVIAN_SEED_COOKIE: ${{ secrets.TRAVIAN_SEED_COOKIE }}
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
-          DRY_RUN: "0"          # 0為目前為正式模式，會真的送出升級請求
+          DRY_RUN: "1"          # 0為目前為正式模式，會真的送出升級請求
         #run: python travian_ci_run.py
         run: python debug_login_flow.py
         #run: python debug_village_buildings.py

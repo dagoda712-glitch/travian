@@ -266,7 +266,7 @@ def run_build_cycle(cfg: dict, *, get, get_dorf1, submit, dry: bool,
     for i in range(cfg["max_builds"]):
         d1 = first_dorf1 if (i == 0 and first_dorf1 is not None) else get_dorf1()
         if 'id="stockBar"' not in d1:
-            T.notify("抓到的不是村莊頁：session / Cookie 可能已失效，請重新複製 Cookie 更新 Secret")
+            disable("抓到的不是村莊頁：session / Cookie 可能已失效，請重新複製 Cookie 更新 Secret")
             return 1
         st = T.parse_dorf1(d1)
         if i == 0:

@@ -8,11 +8,7 @@ Travian Legends 村庄页面 (dorf1.php / dorf2.php) 解析器
     with open("dorf2.html", encoding="utf-8") as f:
         data = parse_village_page(f.read())
 
-用法二：配合登录后的 requests.Session 直接抓取
-    from travian_parser import TravianClient
-    client = TravianClient("https://xxx.travian.com")
-    client.login("your_username", "your_password")
-    data = client.get_village_overview()
+（原「用法二」的 TravianClient 登录示例已移到 tools/legacy/travian_client.py）
 
 注意：
 - Travian 的登录、验证码、Cloudflare 等反爬机制可能变化，登录部分仅作为示例框架，
@@ -24,6 +20,7 @@ Travian Legends 村庄页面 (dorf1.php / dorf2.php) 解析器
 
 from __future__ import annotations
 
+import html as html_lib
 import json
 import re
 from dataclasses import dataclass, field, asdict
@@ -253,27 +250,59 @@ def parse_player_and_village(soup: BeautifulSoup) -> dict:
     return info
 
 
+_ARC_RE = re.compile(r"M\s*55\s+55\s*L\s*(-?[\d.]+)[ ,]+(-?[\d.]+)\s*A\s*[\d.]+[ ,]+[\d.]+\s+\d+\s+\d+\s+(\d)\s+(-?[\d.]+)[ ,]+(-?[\d.]+)")
+
+
+def _ring_pct(svg) -> Optional[int]:
+    """英雄頭像外圈（110x110，圓心 55,55）：clipPath 的弧線終點 = 目前百分比的位置，
+    path.title 的弧線終點 = 100% 的位置，兩者與起點的夾角比就是百分比。"""
+    import math
+    if svg is None:
+        return None
+    clip = svg.select_one("clipPath path")
+    full = svg.select_one("path.title")
+    if clip is None or full is None:
+        return None
+    m1, m2 = _ARC_RE.search(clip.get("d", "")), _ARC_RE.search(full.get("d", ""))
+    if not (m1 and m2):
+        return None
+    sx, sy = float(m2.group(1)), float(m2.group(2))
+    sweep = int(m2.group(3))
+
+    def ang(x, y):
+        return math.degrees(math.atan2(y - 55, x - 55)) % 360
+    a0 = ang(sx, sy)
+
+    def span(m):
+        a = ang(float(m.group(4)), float(m.group(5)))
+        return ((a0 - a) if sweep == 0 else (a - a0)) % 360
+    total = span(m2)
+    return int(round(100 * span(m1) / total)) if total else None
+
+
 def parse_hero(soup: BeautifulSoup) -> HeroInfo:
     hero = HeroInfo()
     hero_box = soup.find(id="topBarHero")
     if not hero_box:
         return hero
 
-    # 血量/经验的 <title> 文字里含百分比，例如 "體力: 100%"
-    for svg in hero_box.select("svg.health title, svg.experience title"):
-        text = svg.get_text()
-        pct = re.search(r"(\d+)\s*%", text.replace("&#37;", "%"))
-        if "體力" in text or "health" in svg.parent.get("class", []):
-            pass
+    # 血量/經驗的 title 文字：體力的方向控制字元是真的 unicode，經驗則是 HTML 實體
+    # （'&#x202d;97&#x202c;&#37;'）。先 unescape 再清掉控制字元，才不會把實體裡的 202 當成數字。
+    def _pct(tag):
+        if tag is None:
+            return None
+        text = re.sub(r"[\u202a-\u202e\u2066-\u2069]", "", html_lib.unescape(tag.get_text()))
+        m = re.search(r"(\d+)\s*%", text)
+        return int(m.group(1)) if m else None
 
-    health_title = hero_box.select_one("svg.health path.title")
-    exp_title = hero_box.select_one("svg.experience path.title")
-    if health_title:
-        m = re.search(r"(\d+)", health_title.get_text())
-        hero.health_percent = int(m.group(1)) if m else None
-    if exp_title:
-        m = re.search(r"(\d+)", exp_title.get_text())
-        hero.experience_percent = int(m.group(1)) if m else None
+    hero.health_percent = _pct(hero_box.select_one("svg.health path.title"))
+    hero.experience_percent = _pct(hero_box.select_one("svg.experience path.title"))
+    # 備援：Playwright 渲染後的 DOM 裡，<title> 提示文字可能被前端 JS 清掉（stockBar 的產量
+    # 也有同樣問題），文字讀不到時改用圓環弧線的幾何位置反推百分比（clipPath 是靜態的）。
+    if hero.health_percent is None:
+        hero.health_percent = _ring_pct(hero_box.select_one("svg.health"))
+    if hero.experience_percent is None:
+        hero.experience_percent = _ring_pct(hero_box.select_one("svg.experience"))
 
     status_tag = hero_box.find(class_="heroStatus")
     hero.status_title = status_tag.get("title") if status_tag else None
@@ -393,42 +422,6 @@ def parse_village_page(html: str) -> VillageOverview:
     overview.infobox_messages = parse_infobox_messages(soup)
 
     return overview
-
-
-# --------------------------------------------------------------------------
-# 可选：登录 + 抓取客户端（框架示例，具体登录流程需按目标服务器实际接口调整）
-# --------------------------------------------------------------------------
-
-class TravianClient:
-    """
-    简单封装：用 requests.Session 登录并抓取 dorf2.php。
-    仅作为个人账号只读查看用途的示例，请自行确认符合目标服务器的使用条款。
-    """
-
-    def __init__(self, base_url: str):
-        import requests
-        self.base_url = base_url.rstrip("/")
-        self.session = requests.Session()
-        self.session.headers.update({
-            "User-Agent": "Mozilla/5.0 (compatible; PersonalVillageBot/1.0)"
-        })
-
-    def login(self, username: str, password: str):
-        """
-        注意：Travian 官服的登录接口可能是 POST /api/v1/auth/login 之类的 JSON 接口，
-        并可能带 CSRF token / 验证码，需要你用浏览器开发者工具抓包确认真实的登录请求
-        （Network 面板里找登录时发出的 POST 请求），再对应改写这里的实现。
-        以下仅为占位示例。
-        """
-        raise NotImplementedError(
-            "请根据实际登录接口（抓包获得）填写此方法，"
-            "本框架仅提供页面解析部分（parse_village_page）。"
-        )
-
-    def get_village_overview(self, village_page: str = "dorf2.php") -> VillageOverview:
-        resp = self.session.get(f"{self.base_url}/{village_page}")
-        resp.raise_for_status()
-        return parse_village_page(resp.text)
 
 
 # --------------------------------------------------------------------------

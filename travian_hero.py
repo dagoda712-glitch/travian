@@ -1,4 +1,4 @@
-"""版本：hero-v1.2（2026-10-16，體力 > hero_hard_min_health 才可選 hard，可選時優先 hard；2026-10-13 hero-v1.1，BIDI 同時支援正規表示式與 list；版本歷史見 project-notes 的「版本對照」）
+"""版本：hero-v1.3（2026-10-17，地點比對改以 JSON 為準、不再用寫死的白名單，修正 lake 等新地形被誤判不一致；hero-v1.2（2026-10-16，體力 > hero_hard_min_health 才可選 hard，可選時優先 hard；2026-10-13 hero-v1.1，BIDI 同時支援正規表示式與 list；版本歷史見 project-notes 的「版本對照」）
 英雄冒險：解析（階段 A）與決策（階段 B）。純函式，不碰網路、不碰 Sheet。
 
 依據：project-notes §13.0（英雄冒險自動化統整）。
@@ -84,6 +84,7 @@ class AdventureRow:
     icon: str                           # "hard" | "normal" | ""
     disabled: bool                      # 按鈕有 disabled class
     has_button: bool
+    classes: tuple = ()                 # 地點圖片的全部 class；比對時看 JSON 的地點在不在裡面
 
 
 # ---------------------------------------------------------------- 階段 A：解析
@@ -171,10 +172,10 @@ def parse_adventure_rows(html: str) -> list[AdventureRow]:
     rows: list[AdventureRow] = []
     for tr in soup.select("table.adventureList tbody tr"):
         img = tr.select_one("td.place img")
-        place = ""
-        if img is not None:
-            known = {"clay", "grassland", "hill", "forest", "natar_village"}
-            place = next((c for c in img.get("class", []) if c in known), "")
+        place_classes = tuple(img.get("class", [])) if img is not None else ()
+        # 真實頁面（10-17 實測）：<img class="lake">，class 本身就是地形名。place 只給 log 看、不用白名單；
+        # 是否一致由 rows_match_json 拿 JSON 的地點去比對 place_classes
+        place = place_classes[0] if place_classes else ""
         dist_td = tr.select_one("td.distance")
         dur = tr.select_one("td.duration div.duration")
         icon_el = tr.select_one("td.difficulty i")
@@ -192,6 +193,7 @@ def parse_adventure_rows(html: str) -> list[AdventureRow]:
                 icon=icon,
                 disabled=bool(btn is not None and "disabled" in btn.get("class", [])),
                 has_button=btn is not None,
+                classes=place_classes,
             )
         )
     return rows
@@ -203,7 +205,9 @@ def rows_match_json(state: HeroState, rows: list[AdventureRow]) -> Optional[str]
     if len(rows) != len(state.adventures):
         return f"列數 {len(rows)} ≠ JSON 筆數 {len(state.adventures)}"
     for i, (r, a) in enumerate(zip(rows, state.adventures)):
-        if r.place != a.place or r.distance != a.distance or r.duration != a.duration:
+        # 地點以 JSON 為準：表格圖片 class 裡要含有 JSON 的地點（不用白名單，新地形也能對上）
+        place_ok = (r.place == a.place) or (a.place in r.classes)
+        if not place_ok or r.distance != a.distance or r.duration != a.duration:
             return f"第 {i + 1} 列與 JSON 不一致（{r.place}/{r.distance}/{r.duration} vs {a.place}/{a.distance}/{a.duration}）"
     return None
 

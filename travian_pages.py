@@ -164,9 +164,15 @@ def parse_building_cost(html: str) -> tuple:
         用同一個 BIDI.sub 清掉即可（不影響 \\d+，只是保險起見先清乾淨）
       - 時間前面多一個 </div>："clock_medium"></i></div><span..."
     """
-    clean = BIDI.sub("", html)
-    cost = [int(v) for _, v in sorted(
-        re.findall(r'class="r(\d)Big"></i><span class="value value">(\d+)<', clean))]
+    # v2.37：成本數字 >= 1,000 時頁面有千分位逗號（例如 "2,550"），舊的 (\\d+)< 遇到逗號就整筆漏掉，
+    # 剩下的數字往前擠（行宮 L5->L6 只解析出 [620]），之後 zip(cost, stock) 會把穀成本當成木成本。
+    # 另外：requests 抓到的原始 HTML 把雙向控制字元寫成實體（&#x202d;），Playwright 的 page.content() 則是真字元；
+    # 先 unescape 再 BIDI.sub，兩種來源都處理。
+    clean = BIDI.sub("", _html.unescape(html))
+    found = {int(i): int(re.sub(r"\D", "", v)) for i, v in re.findall(
+        r'class="r([1-4])Big"></i><span class="value value">([\d.,\s]*\d)\s*<', clean)}
+    # 一定要四種資源都讀到；少任何一種就視為解析失敗（回空 list），不要回「縮水」的清單讓呼叫端錯位比較
+    cost = [found[i] for i in (1, 2, 3, 4)] if set(found) == {1, 2, 3, 4} else []
     # 工期欄位跟成本欄位的 class 不一樣：這裡其實是 "value "（單一個，跟資源田同格式），
     # 不是成本用的 "value value"（兩個）。原本兩個都用 "value value" 找，導致 secs 永遠是 0。
     dur = re.search(r'clock_medium"></i></div><span class="value ">(\d+:\d+:\d+)<', clean)

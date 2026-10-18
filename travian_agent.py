@@ -119,7 +119,7 @@ def parse_build_order(text: str) -> list:
     return goals
 
 
-def plan_with_order(st: State, order: list, get, touched=()):
+def plan_with_order(st: State, order: list, get, touched=(), start=0, _trace=None):
     """依建城順序決定下一步。跟 plan() 回傳同樣的動作（但不會回傳 need_storage：
     成本超過容量時會自動改成先升倉庫/糧倉，補不了才回 blocked），另外多兩種：
       ("blocked", 說明)   計畫卡住了（例如被「不能已經有某棟」擋住），需要人看一下
@@ -127,7 +127,11 @@ def plan_with_order(st: State, order: list, get, touched=()):
     規則：由上到下，第一個「還沒達成」的目標就是現在要做的；它還在等資源/施工，
     後面的目標就不動（嚴格照順序）。要蓋的建築缺前置條件時，自動改成先補條件。
     get(path) -> html 由呼叫端提供（requests 或 Playwright），需要時才會呼叫：
-    只有順序裡有「資源田以外」的目標才會多抓 dorf2 / build.php。"""
+    只有順序裡有「資源田以外」的目標才會多抓 dorf2 / build.php。
+    start / _trace（v2.36 新增，plan_fill_ins 專用；預設值下行為和舊版完全相同）：
+      start   從 order[start:] 開始找第一個還沒達成的目標（前面的目標當作已達成，不檢查）
+      _trace  傳入 list 時，會 append「回傳動作對應的 order 索引」（全部達成＝len(order)；
+              佇列滿而提早回傳 wait_queue 時不 append）"""
     touched = set(touched)
     if len(st.queue) >= QUEUE_SLOTS:
         return ("wait_queue", min(st.queue) + 5)
@@ -250,8 +254,45 @@ def plan_with_order(st: State, order: list, get, touched=()):
             return ("blocked", f"{entry['name']} 沒有綠色按鈕、也沒有未達成的條件（原因不明）")
         return r
 
-    for key, level in order:
+    for idx, (key, level) in enumerate(order):
+        if idx < start:
+            continue
         r = fields_action((1, 2, 3, 4), level, True) if key == "res" else resolve(key, level, need_all=True)
         if r is not None:
+            if _trace is not None:
+                _trace.append(idx)
             return r
+    if _trace is not None:
+        _trace.append(len(order))
     return ("done",)
+
+
+def plan_fill_ins(st: State, order: list, get, touched=(), max_scan: int = 4):
+    """主目標（build_order 裡第一個還沒達成的）是 wait_res 時，列出後面目標中「現在就付得起」的候選，給 runner 判斷能不能插隊。
+    回傳 (主目標動作, [Field...])；主目標不是 wait_res（或佇列滿）時候選是空 list。
+    候選依 build_order 的順序排列，最多往後檢查 max_scan 個未達成的目標；同一輪內相同頁面只抓一次；
+    和主目標同一格（aid）的候選會被排除。純規則、不改 st（plan_with_order 本來就不改 st）。"""
+    cache = {}
+
+    def cget(path):
+        if path not in cache:
+            cache[path] = get(path)
+        return cache[path]
+
+    trace = []
+    main = plan_with_order(st, order, cget, touched, _trace=trace)
+    if main[0] != "wait_res" or not trace:
+        return main, []
+    main_aid = main[2].aid
+    cands = []
+    j, scanned = trace[-1] + 1, 0
+    while j < len(order) and scanned < max_scan:
+        t = []
+        r = plan_with_order(st, order, cget, touched, start=j, _trace=t)
+        if r[0] == "done" or not t:
+            break
+        scanned += 1
+        if r[0] == "build" and r[1].aid != main_aid and all(r[1].aid != c.aid for c in cands):
+            cands.append(r[1])
+        j = t[-1] + 1
+    return main, cands

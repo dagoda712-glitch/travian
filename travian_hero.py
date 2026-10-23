@@ -1,4 +1,4 @@
-"""版本：hero-v1.3（2026-10-17，地點比對改以 JSON 為準、不再用寫死的白名單，修正 lake 等新地形被誤判不一致；hero-v1.2（2026-10-16，體力 > hero_hard_min_health 才可選 hard，可選時優先 hard；2026-10-13 hero-v1.1，BIDI 同時支援正規表示式與 list；版本歷史見 project-notes 的「版本對照」）
+"""版本：hero-v1.4（2026-10-23，rows_match_json 距離改容許誤差 ≤0.15，修正頁面 10.1 vs JSON 10.0 的進位差造成「第 25 列與 JSON 不一致」而整輪不出發；hero-v1.3（2026-10-17，地點比對改以 JSON 為準、不再用寫死的白名單，修正 lake 等新地形被誤判不一致；hero-v1.2（2026-10-16，體力 > hero_hard_min_health 才可選 hard，可選時優先 hard；2026-10-13 hero-v1.1，BIDI 同時支援正規表示式與 list；版本歷史見 project-notes 的「版本對照」）
 英雄冒險：解析（階段 A）與決策（階段 B）。純函式，不碰網路、不碰 Sheet。
 
 依據：project-notes §13.0（英雄冒險自動化統整）。
@@ -207,7 +207,9 @@ def rows_match_json(state: HeroState, rows: list[AdventureRow]) -> Optional[str]
     for i, (r, a) in enumerate(zip(rows, state.adventures)):
         # 地點以 JSON 為準：表格圖片 class 裡要含有 JSON 的地點（不用白名單，新地形也能對上）
         place_ok = (r.place == a.place) or (a.place in r.classes)
-        if not place_ok or r.distance != a.distance or r.duration != a.duration:
+        # 距離：頁面顯示 1 位小數、JSON 經 .3g 取整，進位可差 0.1，故容許 0.15；地點＋秒數才是主要識別
+        dist_ok = r.distance is not None and abs(r.distance - a.distance) <= 0.15
+        if not place_ok or not dist_ok or r.duration != a.duration:
             return f"第 {i + 1} 列與 JSON 不一致（{r.place}/{r.distance}/{r.duration} vs {a.place}/{a.distance}/{a.duration}）"
     return None
 

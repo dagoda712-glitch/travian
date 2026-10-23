@@ -185,11 +185,14 @@ def parse_building_cost(html: str) -> tuple:
     # v2.38：只讀「升級」區塊（<div class="upgradeBuilding">）。研究院的 build.php 在同一頁還列出每個兵種的研究成本
     # （<div class="research">），標記和升級成本完全一樣（r1Big…value value）；舊版掃整頁、同一種資源後面的值覆蓋前面，
     # 研究院升級成本會被最後一個兵種（族長 15,880/22,900/25,200/22,660）蓋掉，成本 > 倉庫容量 → 誤升倉庫。
-    scope = _div_block(clean, r'<div\s+class="upgradeBuilding\b')
+    upgrade = _div_block(clean, r'<div\s+class="upgradeBuilding\b')
+    scope = upgrade or _div_block(clean, r'<div\s+id="contract"')   # 成本區：升級外框 → 退一步只認 #contract
     if scope is None:
-        if 'class="research"' in clean:
-            return [], 0       # 沒有升級區塊、但有兵種研究清單（例如研究院已滿級）：不能把兵種成本當升級成本
-        scope = clean          # 其他建築找不到升級區塊（頁面改版）：退回舊行為，並在下面對「多組成本」發警告
+        # 找不到升級成本區。頁面若有兵種研究清單（<div class="research">）或訓練表單（buildActionOverview，兵營等），
+        # 那些兵種成本也是 r1Big…value value，不能當升級成本 → 回空，呼叫端會當「讀不到升級成本」處理。
+        if 'class="research"' in clean or "buildActionOverview" in clean:
+            return [], 0
+        scope = clean          # 其他建築頁面改版：退回舊行為，並在下面對「多組成本」發警告
     cost_re = r'class="r([1-4])Big"></i><span class="value value">([\d.,\s]*\d)\s*<'
     matches = re.findall(cost_re, scope)
     if len(matches) != 4:
@@ -199,7 +202,9 @@ def parse_building_cost(html: str) -> tuple:
     cost = [found[i] for i in (1, 2, 3, 4)] if set(found) == {1, 2, 3, 4} else []
     # 工期欄位跟成本欄位的 class 不一樣：這裡其實是 "value "（單一個，跟資源田同格式），
     # 不是成本用的 "value value"（兩個）。原本兩個都用 "value value" 找，導致 secs 永遠是 0。
-    dur = re.search(r'clock_medium"></i></div><span class="value ">(\d+:\d+:\d+)<', scope)
+    # 工期在 .upgradeButtonsContainer（可能不在 #contract 裡），所以用升級外框或按鈕區塊找，最後才退回整頁。
+    dur_scope = upgrade or _div_block(clean, r'<div\s+class="upgradeButtonsContainer\b') or scope
+    dur = re.search(r'clock_medium"></i></div><span class="value ">(\d+:\d+:\d+)<', dur_scope)
     return cost, (_hms(dur.group(1)) if dur else 0)
 
 

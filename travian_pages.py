@@ -155,6 +155,19 @@ def parse_dorf2(html: str) -> dict:
     return out
 
 
+def _div_block(html: str, open_pattern: str):
+    """回傳第一個符合 open_pattern 的 <div ...> 元素的完整 HTML（含巢狀 div，用深度計數找對應的 </div>）；找不到回 None。"""
+    m = re.search(open_pattern, html)
+    if not m:
+        return None
+    depth = 0
+    for t in re.finditer(r"<(/?)div\b", html[m.start():]):
+        depth += -1 if t.group(1) else 1
+        if depth == 0:
+            return html[m.start(): m.start() + t.end()]
+    return html[m.start():]    # 沒有對應的結尾（HTML 被截斷）：取到最後
+
+
 def parse_building_cost(html: str) -> tuple:
     """解析 build.php?id=<aid> 的村莊中心建築頁面（倉庫/糧倉），回傳 (cost, secs)。
     跟資源田的 tooltip 格式不同（debug_village_buildings.py 已驗證）：
@@ -169,13 +182,24 @@ def parse_building_cost(html: str) -> tuple:
     # 另外：requests 抓到的原始 HTML 把雙向控制字元寫成實體（&#x202d;），Playwright 的 page.content() 則是真字元；
     # 先 unescape 再 BIDI.sub，兩種來源都處理。
     clean = BIDI.sub("", _html.unescape(html))
-    found = {int(i): int(re.sub(r"\D", "", v)) for i, v in re.findall(
-        r'class="r([1-4])Big"></i><span class="value value">([\d.,\s]*\d)\s*<', clean)}
+    # v2.38：只讀「升級」區塊（<div class="upgradeBuilding">）。研究院的 build.php 在同一頁還列出每個兵種的研究成本
+    # （<div class="research">），標記和升級成本完全一樣（r1Big…value value）；舊版掃整頁、同一種資源後面的值覆蓋前面，
+    # 研究院升級成本會被最後一個兵種（族長 15,880/22,900/25,200/22,660）蓋掉，成本 > 倉庫容量 → 誤升倉庫。
+    scope = _div_block(clean, r'<div\s+class="upgradeBuilding\b')
+    if scope is None:
+        if 'class="research"' in clean:
+            return [], 0       # 沒有升級區塊、但有兵種研究清單（例如研究院已滿級）：不能把兵種成本當升級成本
+        scope = clean          # 其他建築找不到升級區塊（頁面改版）：退回舊行為，並在下面對「多組成本」發警告
+    cost_re = r'class="r([1-4])Big"></i><span class="value value">([\d.,\s]*\d)\s*<'
+    matches = re.findall(cost_re, scope)
+    if len(matches) != 4:
+        print(f"[警告] parse_building_cost 找到 {len(matches)} 筆成本欄位（預期 4）：{matches[:8]}")
+    found = {int(i): int(re.sub(r"\D", "", v)) for i, v in matches}
     # 一定要四種資源都讀到；少任何一種就視為解析失敗（回空 list），不要回「縮水」的清單讓呼叫端錯位比較
     cost = [found[i] for i in (1, 2, 3, 4)] if set(found) == {1, 2, 3, 4} else []
     # 工期欄位跟成本欄位的 class 不一樣：這裡其實是 "value "（單一個，跟資源田同格式），
     # 不是成本用的 "value value"（兩個）。原本兩個都用 "value value" 找，導致 secs 永遠是 0。
-    dur = re.search(r'clock_medium"></i></div><span class="value ">(\d+:\d+:\d+)<', clean)
+    dur = re.search(r'clock_medium"></i></div><span class="value ">(\d+:\d+:\d+)<', scope)
     return cost, (_hms(dur.group(1)) if dur else 0)
 
 

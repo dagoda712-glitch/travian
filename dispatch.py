@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""派兵計算器 v1.4：搶空綠洲讓兵避難（只做計算，不會自動操作遊戲）
+"""派兵計算器 v1.5：搶空綠洲讓兵避難（只做計算，不會自動操作遊戲）
+
+v1.5 變更（v2.82，換伺服器）：家改成 (-28|-72)（doga 的村莊，✓ 區塊 JSON 該格 uid 2713）；HOME／MAP_SIZE 可由 configure() 在執行時覆寫
+（travian_ci_run 從 Config home_x／home_y／map_size 讀）；plan 的 home 預設改成「呼叫時才取」；map_id 依 MAP_SIZE 推算半邊長（不再寫死 200）；
+舊伺服器的 OASES／BLOCKED 搬到 OASES_OLD_SERVER／BLOCKED_OLD_SERVER（不再使用）；新的 OASES 先放區塊 JSON 快照裡「未佔領、無動物」的 4 個。
+地圖大小（401）與伺服器倍速（1）依你的決定「先設定一樣」（✗ 未對新伺服器驗證）。
 
 v1.4 變更：UNIT_SPEED t2 7→6（✓ v2.77：12:32 概況頁 outRaid 剩 3491 秒推出速度 ≤ 6.19，並與 v2.70 單程 3600 秒＝6.00 格÷6 合併）；
 新增 UNIT_ATTACK（t1＝10 ✓ 戰報、t2≈30 △ 由 295 反推）與 UNIT_CARRY（t1＝15、t2＝50 ✓ 兩式聯立），供 hide_troops 的「攻擊力 >20」判斷用。
@@ -37,8 +42,23 @@ try:
 except ImportError:          # Python < 3.9
     ZoneInfo = None
 
-MAP_SIZE = 401                      # 座標 -200..200
-HOME = (-196, 172)
+MAP_SIZE = 401                      # 座標 -200..200（新伺服器先設定一樣 ✗）
+HOME = (-28, -72)                   # 新伺服器（2026-10-24）。Config home_x／home_y 會覆寫
+
+
+def configure(home=None, map_size=None):
+    """執行時覆寫家座標與地圖大小（奇數；座標範圍 -(n-1)/2..(n-1)/2）。None＝不改。"""
+    global HOME, MAP_SIZE
+    if map_size is not None:
+        if int(map_size) < 3 or int(map_size) % 2 == 0:
+            raise ValueError(f"map_size 必須是奇數且 >= 3：{map_size!r}")
+        MAP_SIZE = int(map_size)
+    if home is not None:
+        HOME = (int(home[0]), int(home[1]))
+
+
+def _half():
+    return (MAP_SIZE - 1) // 2
 
 
 def _server_tz():
@@ -74,9 +94,8 @@ UNIT_ATTACK = {
 # 兵種載重（單兵，✓ v2.78 兩式聯立：a＋b＝65、2a＋9b＝480）
 UNIT_CARRY = {"t1": 15, "t2": 50}
 
-# 候選空綠洲：(座標, 加成, 已驗證)。已驗證＝10-22 快照「未佔領、無動物」。
-# 這是人工快照，發兵前務必重讀（綠洲會被佔、動物會重生）。
-OASES = [
+# ── 舊伺服器（家 (-196|172)）的快照，換伺服器後作廢，只留作格式參考，程式不再使用 ──
+OASES_OLD_SERVER = [
     ((-200, 171), "磚 25%", True),
     ((-190, 174), "鐵 25%", True),
     ((-189, 170), "磚＋穀", True),
@@ -98,8 +117,7 @@ OASES = [
     ((-196, 167), "荒廢綠洲", False),
 ]
 
-# 不要派去的地方，僅供參考，程式會直接排除
-BLOCKED = {
+BLOCKED_OLD_SERVER = {
     (-187, 175), (-191, 171), (-181, 173), (-179, 173), (-184, 172),
     (-183, 168), (-190, 167), (-179, 169), (-179, 167),            # 有動物
     (-181, 172), (-178, 167), (-176, 167), (-178, 165),            # 動物很多
@@ -108,6 +126,23 @@ BLOCKED = {
     (-199, 172), (-199, 170), (-199, 168), (-188, 177),            # 附近村莊
     (199, 174), (196, 179), (198, 178), (194, 176),                # 動物（10-22）
     (194, 179), (194, 172),                                        # 已被佔領（10-22）
+}
+
+
+# 候選空綠洲：(座標, 加成, 已驗證)。已驗證＝區塊 JSON 快照「未佔領、無動物」（日期不明，你 10-24 貼的；
+# 加成 r3＝鐵、r2＝磚是依 Travian 慣例 △）。人工快照，發兵前一定會即時驗證 tile-details。
+# 之後由綠洲掃描（oasis_scan.py）取代。
+OASES = [
+    ((-29, -71), "鐵 25%", True),
+    ((-23, -69), "鐵 25%", True),
+    ((-22, -75), "磚 25%", True),
+    ((-21, -75), "鐵 25%", True),
+]
+
+# 不要派去的地方（動物或已被佔領；同一份區塊 JSON）。程式會直接排除。
+BLOCKED = {
+    (-25, -70), (-23, -70), (-21, -74),                            # 有動物
+    (-20, -70), (-21, -71), (-22, -72), (-25, -74), (-20, -75),    # 已被佔領
 }
 
 
@@ -123,7 +158,8 @@ def distance(a, b):
 
 def map_id(x, y):
     """格子 id（派遣預填網址的 targetMapId）。"""
-    return (200 - y) * MAP_SIZE + (x + 200) + 1
+    h = _half()
+    return (h - y) * MAP_SIZE + (x + h) + 1
 
 
 def parse_time(s, base):
@@ -140,9 +176,12 @@ def fmt(t):
     return t.strftime("%H:%M:%S")
 
 
-def plan(now, arrivals, speed, margin=30, home=HOME, oases=OASES, blocked=BLOCKED):
+def plan(now, arrivals, speed, margin=30, home=None, oases=None, blocked=None):
     """純函式。回傳依距離排序的列（dict）。
     現在發兵：離開 now～返回 back。a 被撐過＝ now < a < back - margin。"""
+    home = HOME if home is None else home
+    oases = OASES if oases is None else oases
+    blocked = BLOCKED if blocked is None else blocked
     arrivals = sorted(arrivals)
     rows = []
     for pos, bonus, verified in oases:
@@ -170,7 +209,7 @@ def recommend(rows, include_unverified=False):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="派兵計算器 v1.4")
+    ap = argparse.ArgumentParser(description="派兵計算器 v1.5")
     ap.add_argument("-a", "--arrival", action="append", required=True,
                     help="來襲到達時間 HH:MM:SS（可重複）")
     ap.add_argument("-s", "--speed", type=float,

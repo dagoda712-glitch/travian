@@ -38,15 +38,14 @@ from bs4 import BeautifulSoup
 import dispatch
 import oasis_check
 
-MAP = dispatch.MAP_SIZE
-
 
 # ───────────────────────── 純函式：解析 ─────────────────────────
 
 def coords_from_map_id(mid):
     """map id → (x, y)（dispatch.map_id 的反函數，✓ 11630→(-200,171)）。"""
     n = mid - 1
-    return (n % MAP - 200, 200 - n // MAP)
+    m, half = dispatch.MAP_SIZE, dispatch._half()          # 呼叫時才讀，Config 覆寫後才對
+    return (n % m - half, half - n // m)
 
 
 # 真實概況頁（✓ 10-23 05:47）：同一個「來村軍團」區塊同時有 inReturn（自己的兵歸來）與 inRaid（敵方搶奪），
@@ -196,7 +195,7 @@ class Plan:
 
 
 def decide(now, arrivals_ts, units, *, lookahead_min=90, cluster_min=120, margin=30,
-           min_lead_s=120, speeds=None, home=dispatch.HOME, oases=None, blocked=None,
+           min_lead_s=120, speeds=None, home=None, oases=None, blocked=None,
            include_unverified=True, min_attack=None, attacks=None):
     """now：datetime（伺服器時區）。arrivals_ts：來襲到達 epoch 清單。units：在家兵力。
     include_unverified 預設 True：候選一律會在發兵前即時驗證，清單的「已驗證」旗標不再當門檻。
@@ -226,7 +225,7 @@ def decide(now, arrivals_ts, units, *, lookahead_min=90, cluster_min=120, margin
         return Plan("skip", f"第一波只剩 {lead:.0f} 秒，來不及兩步驟派兵", code="too_close")
     scope = [a for a in fut if a <= fut[0] + timedelta(minutes=cluster_min)]
     speed = min(speeds[u] for u in units)
-    rows = dispatch.plan(now, scope, speed, margin, home,
+    rows = dispatch.plan(now, scope, speed, margin, home if home is not None else dispatch.HOME,
                          oases if oases is not None else dispatch.OASES,
                          blocked if blocked is not None else dispatch.BLOCKED)
     if not include_unverified:

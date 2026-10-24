@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-GitHub Actions 用的「Playwright 版」自動升級資源田（v2.6：英雄冒險點擊前清除 Cookie 同意覆蓋層）。
+GitHub Actions 用的「Playwright 版」自動升級資源田（v2.6：躲兵接 dry／live）。
 
 v2.1：修正 title 被前端 JS 清空導致成本解析失敗的問題。get_html() 會在「這一頁抓到的
 所有田成本都是空的」時，改用 context.request.get() 發一個不經過瀏覽器渲染、不執行任何
@@ -28,10 +28,11 @@ v2.5：躲兵「只觀察」。session 確認有效、確定不是安靜時段�
 模式＝PLAN）。**絕不派兵**。模組載入失敗（例如缺 beautifulsoup4）或執行出錯都只印 log，不影響建城。
 開關在 Sheet 的 Config 分頁：hide_mode（off／observe，預設 observe）。
 
-v2.6：英雄冒險點擊保護。偶發狀況下 #cmpwrapper（Cookie 同意覆蓋層）會攔截 pointer events，
-導致 btn.click() 逾時 30 秒、該輪錯過出發。click_adventure 現在在點擊前把按鈕捲到視窗中央、
-清除 #cmpwrapper（有才清），點擊逾時縮短為 10 秒，失敗改回傳 (False, 說明) 並附上 cmpwrapper 內容
-供診斷。仍然「不重試」：逾時代表點擊沒送出，先清覆蓋層不會造成重複出發。
+v2.7（v2.82，換伺服器）：家座標與地圖大小改由 Config 的 home_x／home_y／map_size 提供（預設 -28／-72／401），
+取得 cfg 後立刻 dispatch.configure；Config 填壞會用預設，並印出實際採用的值。
+
+v2.6：躲兵接上 dry／live（hide_mode＝observe／dry／live；預設仍是 observe）。HO.observe 多傳 min_attack（Config hide_min_attack，
+預設 20）、wait_max_s（hide_wait_max_s，預設 180）、dry_run（DRY_RUN 測試環境下 live 會降成 dry）。observe 行為不變、仍絕不派兵。
 
 這支只負責「Playwright 的 session（cache / 種子 Cookie）、怎麼抓頁面、怎麼送出網址」；
 決策、build_order、送出與驗證、Config / Actions 分頁都在 runner.py。
@@ -42,6 +43,7 @@ import os
 import sys
 from pathlib import Path
 
+import dispatch
 import runner as R
 import hero_focus as HF
 import transfer_io as TIO
@@ -89,6 +91,12 @@ def main() -> int:
     if cfg is None:
         return code
     dry = os.getenv("DRY_RUN", "1") != "0"
+    dispatch.configure(home=(cfg.get("home_x", dispatch.HOME[0]), cfg.get("home_y", dispatch.HOME[1])))
+    try:
+        dispatch.configure(map_size=cfg.get("map_size", dispatch.MAP_SIZE))
+    except ValueError as e:
+        print(f"[設定] Config 的 map_size 不合法，改用預設 {dispatch.MAP_SIZE}：{e}")
+    print(f"[設定] 家 ({dispatch.HOME[0]}|{dispatch.HOME[1]})、地圖邊長 {dispatch.MAP_SIZE}")
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -139,15 +147,6 @@ def main() -> int:
             page.goto(url if url.startswith("http") else f"{BASE}/{url.lstrip('/')}",
                       wait_until="networkidle")
 
-        def clear_cmp() -> None:
-            """Cookie 同意覆蓋層偶爾會擋住點擊；有就移除，沒有就略過。"""
-            try:
-                if page.locator("#cmpwrapper").count():
-                    page.evaluate("document.getElementById('cmpwrapper')?.remove()")
-                    print("  [冒險] 偵測到 #cmpwrapper 覆蓋層，已移除")
-            except Exception as e:  # noqa: BLE001
-                print(f"  [冒險] 清除 #cmpwrapper 失敗（略過）：{e!r}")
-
         def click_adventure(number: int, row_index: int, expected):
             """點冒險頁第 row_index 列的「探索」，並重讀頁面確認英雄真的出發。回傳 (成功與否, 說明)。
             安全規則：點擊前重讀並核對（狀態、列數、地點／距離／時間／難度圖示、按鈕沒有 disabled、沒有
@@ -172,19 +171,7 @@ def main() -> int:
             if not row.has_button or row.disabled:
                 return False, "點擊前核對失敗：按鈕不存在或是 disabled"
             btn = page.locator("table.adventureList tbody tr").nth(row_index).locator("td.button button")
-            btn.evaluate("el => el.scrollIntoView({block: 'center'})")
-            clear_cmp()
-            try:
-                btn.click(timeout=10000)
-            except Exception as e:  # noqa: BLE001
-                # 逾時代表點擊沒送出（不會重複出發）；順便記錄覆蓋層內容，下次可以查原因
-                try:
-                    info = page.evaluate(
-                        "() => { const c = document.getElementById('cmpwrapper');"
-                        " return c ? c.outerHTML.slice(0, 300) : null }")
-                except Exception:  # noqa: BLE001
-                    info = "讀取失敗"
-                return False, f"點擊失敗（未送出）：cmpwrapper={info} err={str(e)[:120]}"
+            btn.click()
             page.wait_for_timeout(3000)
             page.goto(f"{BASE}/hero/adventures", wait_until="networkidle")
             after = H.parse_hero_json(page.content())
@@ -232,7 +219,9 @@ def main() -> int:
 
         # 躲兵「只觀察」：只讀、只記錄、不派兵；沒有來襲時不多打任何請求；任何例外都不影響建城
         if HO is not None:
-            HO.observe(page, BASE, d1, mode=cfg.get("hide_mode", "observe"))
+            HO.observe(page, BASE, d1, mode=cfg.get("hide_mode", "observe"),
+                       min_attack=cfg.get("hide_min_attack", 20),
+                       wait_max_s=cfg.get("hide_wait_max_s", 180), dry_run=dry)
 
         # session 已確認有效、context 之後不會再被替換，這時才建立 transfer_io
         # （make_io 會把「當下」的 context 綁進 closure，所以不能在 context 重建之前呼叫）

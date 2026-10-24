@@ -135,7 +135,8 @@ _CONFIG_ORDER = ("enabled", "target_level", "queue_slots", "is_capital",
                  "max_builds", "target_building_level", "build_order",
                  "hero_adventure", "hero_min_health", "hero_allowed", "hero_skip_on_incoming", "hero_transfer_mode", "hero_transfer_min", "hero_transfer_max_gap", "hero_transfer_eta_min",
                  "hero_focus_mode", "hero_focus_min_hours", "hero_hard_min_health",
-                 "hero_guard_mode", "hero_guard_hidden", "fill_in_mode", "fill_in_slack_min")
+                 "hero_guard_mode", "hero_guard_hidden", "fill_in_mode", "fill_in_slack_min",
+                 "hide_mode", "hide_min_attack", "hide_wait_max_s")
 _CONFIG_NOTES = {
     "enabled": "FALSE = 緊急停止；session 失效時程式也會改成 FALSE",
     "target_level": "資源田升到幾級（沒設 build_order 時使用）",
@@ -159,6 +160,9 @@ _CONFIG_NOTES = {
     "hero_guard_hidden": "山洞每種資源的隱藏量（整數，預設 2000；本村埃及 10 級實測 2000）",
     "fill_in_mode": "off／dry／on：有 build_order 且主目標「等待資源」時，插隊做後面付得起、而且不會拖慢主目標開工的項目。dry = 只記錄「插隊」列、不送出；on = 真的先升；來襲時超過 hero_guard_hidden 的存量視為已被搶（看不懂一律當 off）",
     "fill_in_slack_min": "插隊允許把主目標開工時間拖慢幾分鐘（整數，預設 0＝不准拖慢）",
+    "hide_mode": "躲兵：off／observe／dry／live。observe = 有來襲時只讀、只記錄（動作「躲兵觀察」），絕不派兵；dry = 走到確認頁、核對後不按確認；live = 核對通過才按確認派兵（DRY_RUN 測試環境下 live 會降成 dry）；off = 完全不做（看不懂一律當 off）",
+    "hide_min_attack": "躲兵派出兵力的攻擊力合計必須「大於」這個數字（整數，預設 20；t1＝10、t2≈30）；沒列攻擊力的兵種算 0",
+    "hide_wait_max_s": "躲兵 dry／live：自己的兵在幾秒內歸來、而且歸來後下一波還來得及，就等到歸來再派（整數秒，預設 180；0＝不等；observe 不等）",
 }
 
 
@@ -170,7 +174,8 @@ def _default_cfg() -> dict:
             "hero_transfer_max_gap": 1000, "hero_transfer_eta_min": 45,
             "hero_focus_mode": "off", "hero_focus_min_hours": 1, "hero_hard_min_health": 60,
             "hero_guard_mode": "off", "hero_guard_hidden": 2000,
-            "fill_in_mode": "off", "fill_in_slack_min": 0}
+            "fill_in_mode": "off", "fill_in_slack_min": 0,
+            "hide_mode": "observe", "hide_min_attack": 20, "hide_wait_max_s": 180}
 
 
 def _cfg_cell(v) -> str:
@@ -244,10 +249,12 @@ def load_config() -> dict:
             cfg[k] = v.lower()          # off／dry／incoming／always，其餘由 runner 當 off
         elif k == "fill_in_mode":
             cfg[k] = v.lower()          # off／dry／on，其餘由 runner 當 off
+        elif k == "hide_mode":
+            cfg[k] = v.lower()          # off／observe／dry／live，其餘由 hide_observe 當 off（空白也是 off）
         elif k in ("target_level", "queue_slots", "max_builds", "target_building_level",
                    "hero_min_health", "hero_transfer_min", "hero_transfer_max_gap",
                    "hero_transfer_eta_min", "hero_focus_min_hours", "hero_hard_min_health",
-                   "hero_guard_hidden", "fill_in_slack_min") and v.isdigit():
+                   "hero_guard_hidden", "fill_in_slack_min", "hide_min_attack", "hide_wait_max_s") and v.isdigit():
             cfg[k] = int(v)
     try:
         _ensure_config_rows(ws, rows)

@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""派兵計算器 v1.5：搶空綠洲讓兵避難（只做計算，不會自動操作遊戲）
+"""派兵計算器 v1.6：搶空綠洲讓兵避難（只做計算，不會自動操作遊戲）
+
+v1.6 變更（v2.85，族群通用）：兵種表（速度／攻擊力／載重）不再寫死埃及人，改成依族群的 TRIBES 表；
+configure(tribe="auto") 會讀 Sheet「state」分頁的 tribe 欄（bot 每輪都會寫，例：高盧），自己判斷族群並把
+UNIT_SPEED／UNIT_ATTACK／UNIT_CARRY 就地換成該族群的表（hide_troops 本來就是呼叫時才讀 dispatch.UNIT_*，所以立刻生效）。
+讀不到、或族群不在 TRIBES 裡 → 三張表清空（hide_troops 會因「兵種速度未知」整輪不動，不會用錯表派兵）。
+沒呼叫 configure 的場合（單元測試、單獨跑 CLI）維持舊預設（埃及人表），行為與 v1.5 相同。
+CLI 新增 --tribe（族群名稱或 auto）。
 
 v1.5 變更（v2.82，換伺服器）：家改成 (-28|-72)（doga 的村莊，✓ 區塊 JSON 該格 uid 2713）；HOME／MAP_SIZE 可由 configure() 在執行時覆寫
 （travian_ci_run 從 Config home_x／home_y／map_size 讀）；plan 的 home 預設改成「呼叫時才取」；map_id 依 MAP_SIZE 推算半邊長（不再寫死 200）；
@@ -26,8 +33,8 @@ v1.1 變更：距離環繞（地圖 -200～200，寬 401）、候選明確依距
 參數：
     -a / --arrival   來襲到達時間（伺服器時間 HH:MM:SS），可重複填
     -s / --speed     部隊速度（格／小時，基礎值）；與 --unit 擇一
-    --unit           兵種欄位 t1～t10（可重複；多個取最慢）。t1 奴隸民兵＝7 ✓（10-23
-                     確認頁單程 0:35:20 = 4.12 格÷7）；t2＝6（✓ 上限推算）；t3 為 7（△ 未實測）
+    --tribe          族群名稱（例：高盧）或 auto（讀 Sheet state 分頁）；兵種表依族群（TRIBES）
+    --unit           兵種欄位 t1、t2…（可重複；多個取最慢），速度取自目前族群的表
     --server-speed   伺服器速度倍率（預設 1）
     --margin         安全緩衝秒數：兵要比最後一波晚幾秒回家（預設 30）
     --now            手動指定現在的伺服器時間 HH:MM:SS（預設用 Europe/London 的現在時間）
@@ -46,8 +53,10 @@ MAP_SIZE = 401                      # 座標 -200..200（新伺服器先設定�
 HOME = (-28, -72)                   # 新伺服器（2026-10-24）。Config home_x／home_y 會覆寫
 
 
-def configure(home=None, map_size=None):
-    """執行時覆寫家座標與地圖大小（奇數；座標範圍 -(n-1)/2..(n-1)/2）。None＝不改。"""
+def configure(home=None, map_size=None, tribe=None, read_state=None):
+    """執行時覆寫家座標、地圖大小（奇數；座標範圍 -(n-1)/2..(n-1)/2）與族群。None＝不改。
+    tribe："auto"＝讀 state 分頁的 tribe 欄；其他字串＝直接指定名稱（例：高盧、gauls）。
+    讀不到或不認得 → 兵種表清空（保守：躲兵會因兵種速度未知而不動），並印出原因。回傳目前族群鍵（可能是 None）。"""
     global HOME, MAP_SIZE
     if map_size is not None:
         if int(map_size) < 3 or int(map_size) % 2 == 0:
@@ -55,6 +64,16 @@ def configure(home=None, map_size=None):
         MAP_SIZE = int(map_size)
     if home is not None:
         HOME = (int(home[0]), int(home[1]))
+    if tribe is not None:
+        raw = tribe_from_state(read_state) if str(tribe).strip().lower() == "auto" else tribe
+        key = resolve_tribe(raw)
+        src = "state" if str(tribe).strip().lower() == "auto" else "指定"
+        _apply_tribe(key, src)
+        if key:
+            print(f"[族群] {raw}（{src}）→ {key}，兵種表 {sorted(UNIT_SPEED)}")
+        else:
+            print(f"[族群] 無法判斷族群（{raw!r}）；兵種表已清空，躲兵不會動")
+    return TRIBE
 
 
 def _half():
@@ -76,23 +95,107 @@ def _server_tz():
 
 SERVER_TZ = _server_tz()
 
-# 兵種速度（格／小時，基礎值，伺服器 1 倍）。埃及人欄位 t1～t10。
-# 只收已知的步兵；t1 ✓ 實測，其餘 △。其他兵種請用 -s。
-UNIT_SPEED = {
-    "t1": 7,   # 奴隸民兵 ✓（10-23：4.12 格、單程 0:35:20）
-    "t2": 6,   # 看守人艾什 ✓（v2.77：12:32 outRaid t1×2＋t2×9、英雄 0，剩 3491 秒 → 速度 ≤ 6.19；與 3600 秒＝6.00 格÷6 合併，t1＝7 所以只能是 t2）
-    "t3": 7,   # 斧刀勇士 △
-    "t4": 16,  # 探險者索普杜 ✓（偵察 Village 003：3.1623 格÷16×3600＝711.5 秒）
+# ── 兵種表（依族群）──
+# 每個兵種：(速度 格/時 伺服器 1 倍, 單兵攻擊力, 單兵載重)；None＝未知（不收進表，hide_troops 會當「未知」處理）。
+# 只收步兵／騎兵；攻城器、拓荒者、首領不收（不該拿去避難）。標記：✓ 有實測或官方表，△ 推定／第三方。
+# 新族群請在這裡加一筆（名稱別名在 TRIBE_ALIASES）；沒加＝未知族群＝全部兵種視為速度未知、躲兵不動。
+# 目前沒有：匈奴、斯巴達、維京（v2.85 查不到完整可靠的表：各來源速度互相矛盾、兵種欄位編號不確定，寧可不填）。
+TRIBES = {
+    "gauls": {          # 高盧。Travian Kingdoms 說明中心的一般世界兵種表（support.kingdoms.com；注意那是 Kingdoms 的說明頁，
+                        # 不是你玩的 Legends——t1～t5 數值與我記憶中的 Legends 一致，△）。新伺服器沒實測，確認頁單程仍是最後核對。
+        "t1": (7, 15, 35),      # 方陣兵 Phalanx
+        "t2": (6, 65, 45),      # 劍士 Swordsman
+        "t3": (17, 0, 0),       # 偵察兵 Pathfinder
+        "t4": (19, 90, 75),     # 雷法師 Theutates Thunder
+        "t5": (16, 45, 35),     # 德魯伊騎兵 Druidrider
+        "t6": (13, 140, 65),    # 海頓聖騎士 Haeduan（一般世界攻擊 140；Summer Mayhem 2026 活動世界是 95，不採用）
+    },
+    "romans": {         # 羅馬。Travian Kingdoms 說明中心的一般世界兵種表（△ 與 Legends 基礎值一致是我的記憶，新伺服器沒實測）
+        "t1": (6, 40, 50),      # 近衛兵 Legionnaire
+        "t2": (5, 30, 20),      # 禁衛兵 Praetorian
+        "t3": (7, 70, 50),      # 帝國兵 Imperian
+        "t4": (16, 0, 0),       # 偵察騎兵 Equites Legati
+        "t5": (14, 120, 100),   # 帝國騎兵 Equites Imperatoris
+        "t6": (10, 180, 70),    # 皇帝騎兵 Equites Caesaris
+    },
+    "teutons": {        # 條頓。同上來源與保留
+        "t1": (7, 40, 60),      # 棍棒兵 Clubswinger
+        "t2": (7, 10, 40),      # 矛兵 Spearfighter
+        "t3": (6, 60, 50),      # 斧頭兵 Axefighter
+        "t4": (9, 0, 0),        # 偵察兵 Scout
+        "t5": (10, 55, 110),    # 騎士 Paladin
+        "t6": (9, 150, 80),     # 日耳曼騎士 Teutonic Knight
+    },
+    "egyptians": {      # 埃及人。舊伺服器實測（換伺服器後沒重驗；新伺服器若是埃及人要再核對）
+        "t1": (7, 10, 15),      # 奴隸民兵 ✓（速度 10-23 確認頁；攻擊 04:24 戰報；載重 v2.78 兩式聯立）
+        "t2": (6, 30, 50),      # 看守人艾什：速度 ✓ v2.77 上限推算；攻擊 △ 295 反推約 30.6；載重 ✓
+        "t3": (7, None, None),  # 斧刀勇士：速度 △
+        "t4": (16, None, None), # 探險者索普杜：速度 ✓（偵察 Village 003 反推）
+    },
 }
 
-# 兵種攻擊力（單兵）。只收已知的；沒列＝未知，hide_troops 的攻擊力合計把它當 0（保守）。
-UNIT_ATTACK = {
-    "t1": 10,  # ✓ 04:24 戰報：1 隻＝攻 10
-    "t2": 30,  # △ 295 反推約 30.6（2×10＋9×30＝290，差 5 未解）
+# state 分頁 tribe 欄可能的寫法 → TRIBES 的鍵（比對時去空白、轉小寫；「人」「族」結尾會先去掉）
+TRIBE_ALIASES = {
+    "gauls": ("高盧", "高卢", "gaul", "gauls"),
+    "egyptians": ("埃及", "egyptian", "egyptians"),
+    "romans": ("羅馬", "罗马", "roman", "romans"),
+    "teutons": ("條頓", "条顿", "日耳曼", "teuton", "teutons"),
 }
 
-# 兵種載重（單兵，✓ v2.78 兩式聯立：a＋b＝65、2a＋9b＝480）
-UNIT_CARRY = {"t1": 15, "t2": 50}
+UNIT_SPEED = {}      # 目前族群的表；用 _apply_tribe 就地更新（不要重新指定，hide_troops 等是呼叫時才讀）
+UNIT_ATTACK = {}
+UNIT_CARRY = {}
+TRIBE = None         # 目前採用的族群鍵（TRIBES 的鍵）；None＝未知（表是空的）
+TRIBE_SOURCE = "default"
+
+
+def resolve_tribe(name):
+    """state 的 tribe 值（例：高盧）→ TRIBES 的鍵；認不得回 None。"""
+    t = str(name or "").strip().casefold().rstrip("人族")
+    if not t:
+        return None
+    for key, names in TRIBE_ALIASES.items():
+        if t in (n.casefold().rstrip("人族") for n in names):
+            return key
+    return None
+
+
+def _apply_tribe(key, source="configure"):
+    """把三張表就地換成 key 的內容；key 是 None 或不在 TRIBES → 三張表清空。"""
+    global TRIBE, TRIBE_SOURCE
+    units = TRIBES.get(key, {}) if key else {}
+    for tbl in (UNIT_SPEED, UNIT_ATTACK, UNIT_CARRY):
+        tbl.clear()
+    for u, (spd, atk, carry) in units.items():
+        if spd is not None:
+            UNIT_SPEED[u] = spd
+        if atk is not None:
+            UNIT_ATTACK[u] = atk
+        if carry is not None:
+            UNIT_CARRY[u] = carry
+    TRIBE = key if units else None
+    TRIBE_SOURCE = source
+    return TRIBE
+
+
+def tribe_from_state(read_rows=None):
+    """讀 Sheet「state」分頁的 tribe 欄（A 欄 key、B 欄值）→ 原字串（例：高盧）；讀不到回 None，不拋例外。
+    read_rows：測試用，回傳 [[key, 值, ...], ...] 的 callable；預設用 sheets_writer 開試算表。"""
+    try:
+        if read_rows is None:
+            import sheets_writer as SW
+            if not SW.has_sheet():
+                return None
+            read_rows = SW.open_sheet().worksheet("state").get_all_values
+        for row in read_rows():
+            if row and str(row[0]).strip() == "tribe" and len(row) > 1:
+                return str(row[1]).strip() or None
+    except Exception as e:                                          # noqa: BLE001
+        print(f"[族群] 讀 state 分頁失敗：{e!r}")
+    return None
+
+
+_apply_tribe("egyptians", "default")      # 沒人呼叫 configure 時的舊預設（與 v1.5 相同）
 
 # ── 舊伺服器（家 (-196|172)）的快照，換伺服器後作廢，只留作格式參考，程式不再使用 ──
 OASES_OLD_SERVER = [
@@ -209,20 +312,26 @@ def recommend(rows, include_unverified=False):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="派兵計算器 v1.5")
+    ap = argparse.ArgumentParser(description="派兵計算器 v1.6")
     ap.add_argument("-a", "--arrival", action="append", required=True,
                     help="來襲到達時間 HH:MM:SS（可重複）")
     ap.add_argument("-s", "--speed", type=float,
                     help="部隊速度（格／小時，基礎值）；與 --unit 擇一")
-    ap.add_argument("--unit", action="append", choices=sorted(UNIT_SPEED),
-                    help="兵種欄位（t1～t4，可重複；多個取最慢）")
+    ap.add_argument("--unit", action="append",
+                    help="兵種欄位（t1、t2…，可重複；多個取最慢；要在目前族群的表裡）")
+    ap.add_argument("--tribe", help="族群名稱（例：高盧）或 auto（讀 Sheet state 分頁）；省略＝舊預設（埃及人表）")
     ap.add_argument("--server-speed", type=float, default=1.0)
     ap.add_argument("--margin", type=int, default=30)
     ap.add_argument("--now", help="現在伺服器時間 HH:MM:SS")
     ap.add_argument("--include-unverified", action="store_true")
     args = ap.parse_args()
+    if args.tribe:
+        configure(tribe=args.tribe)
     if args.speed is None and not args.unit:
         ap.error("請用 -s 指定速度，或用 --unit 指定兵種")
+    bad = [u for u in (args.unit or []) if u not in UNIT_SPEED]
+    if bad:
+        ap.error(f"目前族群（{TRIBE}）的表沒有 {','.join(bad)}；可用：{','.join(sorted(UNIT_SPEED)) or '（空）'}，或改用 -s")
     base_speed = args.speed if args.speed is not None \
         else min(UNIT_SPEED[u] for u in args.unit)
 

@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """派兵計算器 v1.6：搶空綠洲讓兵避難（只做計算，不會自動操作遊戲）
 
+v1.7 變更（v2.86）：內建 OASES／BLOCKED 只在家＝(-28|-72) 時有效；configure(home=其他座標) 會把它們清空（埃及人舊伺服器那邊
+曾因退回內建清單而拿新伺服器的座標去驗證，全部「不安全」）。清空後沒有候選綠洲，hide_troops 會 skip（no_oasis），不派兵。
+
 v1.6 變更（v2.85，族群通用）：兵種表（速度／攻擊力／載重）不再寫死埃及人，改成依族群的 TRIBES 表；
 configure(tribe="auto") 會讀 Sheet「state」分頁的 tribe 欄（bot 每輪都會寫，例：高盧），自己判斷族群並把
 UNIT_SPEED／UNIT_ATTACK／UNIT_CARRY 就地換成該族群的表（hide_troops 本來就是呼叫時才讀 dispatch.UNIT_*，所以立刻生效）。
@@ -64,6 +67,15 @@ def configure(home=None, map_size=None, tribe=None, read_state=None):
         MAP_SIZE = int(map_size)
     if home is not None:
         HOME = (int(home[0]), int(home[1]))
+        if HOME == BUILTIN_HOME:
+            OASES[:] = _BUILTIN_OASES
+            BLOCKED.clear()
+            BLOCKED.update(_BUILTIN_BLOCKED)
+        else:
+            if OASES:
+                print(f"[設定] 家 {HOME} 不是內建清單的家 {BUILTIN_HOME}：內建綠洲清單作廢，只用掃描結果")
+            OASES.clear()
+            BLOCKED.clear()
     if tribe is not None:
         raw = tribe_from_state(read_state) if str(tribe).strip().lower() == "auto" else tribe
         key = resolve_tribe(raw)
@@ -247,6 +259,12 @@ BLOCKED = {
     (-25, -70), (-23, -70), (-21, -74),                            # 有動物
     (-20, -70), (-21, -71), (-22, -72), (-25, -74), (-20, -75),    # 已被佔領
 }
+
+# 內建清單只對「這個家」有效（v1.7）：它們是新伺服器、家 (-28|-72) 附近的座標。家不是這個座標（例如另一個伺服器的
+# 帳號）時，configure(home=...) 會把 OASES／BLOCKED 清空，不拿別的伺服器的座標去驗證或派兵；之後只有掃描結果（oasis_store.apply）會填。
+BUILTIN_HOME = (-28, -72)
+_BUILTIN_OASES = list(OASES)
+_BUILTIN_BLOCKED = set(BLOCKED)
 
 
 def wrap_delta(a, b):

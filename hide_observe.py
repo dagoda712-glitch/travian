@@ -1,5 +1,8 @@
 """躲兵 v0.2（檔名沿用 hide_observe）：hide_mode＝observe 時只讀、只記錄，絕不派兵；dry／live 見下。
 
+v0.3（v2.83）：確認有來襲之後、算 plan 之前，讀 Sheet「Oases」分頁換掉 dispatch.OASES／BLOCKED（oasis_store.refresh，
+  allow_scan=False：有來襲時只讀、不掃）；Sheet 沒資料、沒有 gspread 或任何失敗都只印 log、沿用 dispatch.py 內建清單。其餘行為不變。
+
 v0.2（v2.80）：
   - hide_mode 新增 dry（走到確認頁、不按確認）與 live（核對通過才按確認）；observe 行為不變（仍是 plan、動作「躲兵觀察」）。
     dry／live 的 Actions 列：動作＝「躲兵」、模式＝DRY／LIVE、結果＝派兵結果。
@@ -83,6 +86,12 @@ def observe(page, base, d1, *, mode="observe", log=None, save_dir="debug_html", 
         if max(n_sym, n_pages or 0) == 0:
             print("[躲兵觀察] 沒有來襲")
             return None
+
+        try:                                                    # 有來襲才讀 Sheet「Oases」換掉內建清單；不在這時候掃（省時間）
+            import oasis_store
+            oasis_store.refresh(page, base, allow_scan=False)
+        except Exception as e:                                  # noqa: BLE001
+            print(f"[躲兵] 綠洲清單載入失敗，沿用內建清單：{e!r}")
 
         saved = {}
 

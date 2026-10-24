@@ -28,6 +28,9 @@ v2.5：躲兵「只觀察」。session 確認有效、確定不是安靜時段�
 模式＝PLAN）。**絕不派兵**。模組載入失敗（例如缺 beautifulsoup4）或執行出錯都只印 log，不影響建城。
 開關在 Sheet 的 Config 分頁：hide_mode（off／observe，預設 observe）。
 
+v2.9：取得 cfg 後 dispatch.configure(tribe="auto")：兵種表（速度／攻擊力／載重）依 Sheet「state」分頁的 tribe 欄（bot 上一輪寫入）決定，
+不再寫死埃及人；讀不到或不認得的族群 → 表清空 → 躲兵因「兵種速度未知」不動（印 log）。
+
 v2.8：每輪最後呼叫 oasis_store.refresh：Sheet「Oases」分頁超過 12 小時才重掃區塊並寫回，其餘輪只讀一次 Sheet；
 有來襲時 hide_observe 讀這份清單套用到 dispatch.OASES／BLOCKED（讀不到就沿用 dispatch.py 內建清單）。
 
@@ -100,6 +103,7 @@ def main() -> int:
     except ValueError as e:
         print(f"[設定] Config 的 map_size 不合法，改用預設 {dispatch.MAP_SIZE}：{e}")
     print(f"[設定] 家 ({dispatch.HOME[0]}|{dispatch.HOME[1]})、地圖邊長 {dispatch.MAP_SIZE}")
+    dispatch.configure(tribe="auto")      # 讀 Sheet「state」的 tribe 欄決定兵種表；讀不到就清空（躲兵不動，不會用錯表）
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)

@@ -28,6 +28,9 @@ v2.5：躲兵「只觀察」。session 確認有效、確定不是安靜時段�
 模式＝PLAN）。**絕不派兵**。模組載入失敗（例如缺 beautifulsoup4）或執行出錯都只印 log，不影響建城。
 開關在 Sheet 的 Config 分頁：hide_mode（off／observe，預設 observe）。
 
+v2.8：每輪最後呼叫 oasis_store.refresh：Sheet「Oases」分頁超過 12 小時才重掃區塊並寫回，其餘輪只讀一次 Sheet；
+有來襲時 hide_observe 讀這份清單套用到 dispatch.OASES／BLOCKED（讀不到就沿用 dispatch.py 內建清單）。
+
 v2.7（v2.82，換伺服器）：家座標與地圖大小改由 Config 的 home_x／home_y／map_size 提供（預設 -28／-72／401），
 取得 cfg 後立刻 dispatch.configure；Config 填壞會用預設，並印出實際採用的值。
 
@@ -240,6 +243,14 @@ def main() -> int:
         # 英雄冒險：獨立於建城，失敗只通知（run_hero_cycle 內部已接住例外）；hero_adventure 預設 FALSE
         R.run_hero_cycle(cfg, get=get_html, get_dorf1=lambda: get_html("dorf1.php", raw=True),
                          click_adventure=click_adventure, dry=dry)
+
+        # 綠洲清單：放在建城與英雄之後，不拖慢升級。Sheet「Oases」超過 12 小時才真的去掃（約 25 次唯讀請求），
+        # 其餘輪只讀一次 Sheet；失敗只印 log、不影響結果。有來襲時 hide_observe 會讀這份清單。
+        try:
+            import oasis_store
+            oasis_store.refresh(page, BASE, max_age_h=12, allow_scan=True)
+        except Exception as e:                 # noqa: BLE001
+            print(f"[綠洲掃描] 略過：{e!r}")
 
         # 不管這輪做了什麼，只要一開始 session 是活的，就把最新狀態存回去，
         # 讓下一輪 actions/cache 可以接續使用

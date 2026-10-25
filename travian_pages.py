@@ -403,3 +403,79 @@ def fetch_build_options(get, aid: int) -> list:
             o["category"] = label
             out.append(o)
     return out
+
+
+# ───────── 目前村莊座標（v2.96）─────────
+# 來源 A：頁面內嵌的 viewData JSON（ownPlayer.village：id／x／y）。來源 B：側欄村莊列表「active」那列的座標文字
+# （格式 (−196|172)，負號是 U+2212，數字外面包 U+202D／U+202C）。✓ 兩份 dorf1 樣本（家 (−196|172)、did 65222）兩處一致。
+_MINUS = dict.fromkeys(map(ord, "\u202d\u202c\u200e\u200f"), None)
+
+
+def _village_from_viewdata(html: str):
+    """來源 A。回傳 dict(id,x,y) 或 None。找不到、不是 JSON、欄位不是整數都回 None。"""
+    m = re.search(r"viewData\s*:\s*", html)
+    if not m:
+        return None
+    try:
+        obj, _ = json.JSONDecoder().raw_decode(html, m.end())
+        v = obj["ownPlayer"]["village"]
+        x, y = v["x"], v["y"]
+        if isinstance(x, bool) or isinstance(y, bool) or not isinstance(x, int) or not isinstance(y, int):
+            return None
+        vid = v.get("id")
+        return {"id": int(vid) if isinstance(vid, int) else None, "x": x, "y": y}
+    except (ValueError, KeyError, TypeError):
+        return None
+
+
+def _village_from_sidebar(html: str):
+    """來源 B。回傳 dict(id,x,y) 或 None。只認 class 同時有 listEntry、village、active 的那一列。"""
+    soup = BeautifulSoup(html, "html.parser")
+    for el in soup.select("div.listEntry.village.active"):
+        c = el.select_one(".coordinatesGrid")
+        if c is None:
+            continue
+        txt = _html.unescape(c.get_text("", strip=True)).translate(_MINUS).replace("\u2212", "-")
+        mm = re.search(r"\(\s*(-?\d+)\s*\|\s*(-?\d+)\s*\)", txt)
+        if mm:
+            did = el.get("data-did")
+            return {"id": int(did) if did and did.isdigit() else None,
+                    "x": int(mm.group(1)), "y": int(mm.group(2))}
+    return None
+
+
+def parse_active_village(html: str, map_size: int = 401):
+    """目前選中的村莊 → dict(id, x, y, source)；讀不到、兩處不一致、座標超出地圖範圍一律回 None（不猜）。
+    source：'viewData+sidebar'（兩處一致）／'viewData'／'sidebar'（只有一處讀到）。"""
+    a, b = _village_from_viewdata(html), _village_from_sidebar(html)
+    if a and b and (a["x"], a["y"]) != (b["x"], b["y"]):
+        return None
+    if a and b and a["id"] and b["id"] and a["id"] != b["id"]:
+        return None
+    v, src = (a, "viewData") if a else (b, "sidebar") if b else (None, None)
+    if v is None:
+        return None
+    if a and b:
+        src = "viewData+sidebar"
+    half = (int(map_size) - 1) // 2
+    if not (-half <= v["x"] <= half and -half <= v["y"] <= half):
+        return None
+    return {"id": v["id"] or (b or {}).get("id"), "x": v["x"], "y": v["y"], "source": src}
+
+
+def resolve_home(html: str, cfg_home=None, map_size: int = 401):
+    """決定這輪的家。優先頁面；頁面讀不到才用 Config 備用；兩者都沒有回 (None, 說明)。
+    頁面與 Config 不同時以頁面為準，說明裡會提到。回傳 ((x, y) 或 None, 說明字串)。"""
+    v = parse_active_village(html, map_size)
+    cfg = None
+    if cfg_home and cfg_home[0] is not None and cfg_home[1] is not None:
+        cfg = (int(cfg_home[0]), int(cfg_home[1]))
+    if v:
+        home = (v["x"], v["y"])
+        note = f"家 {home}（頁面 {v['source']}，村莊 id {v['id']}）"
+        if cfg is not None and cfg != home:
+            note += f"；Config 的 home_x／home_y={cfg} 與頁面不同，以頁面為準"
+        return home, note
+    if cfg is not None:
+        return cfg, f"頁面讀不到村莊座標，退回 Config 的 home_x／home_y={cfg}"
+    return None, "頁面讀不到村莊座標，Config 也沒有 home_x／home_y：本輪不躲兵"

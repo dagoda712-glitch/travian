@@ -1,7 +1,9 @@
-"""躲兵 v0.2（檔名沿用 hide_observe）：hide_mode＝observe 時只讀、只記錄，絕不派兵；dry／live 見下。
+"""躲兵 v0.4（v2.96）：dispatch.HOME 是 None（頁面與 Config 都沒給家）→ 直接略過，不躲兵；其餘不變。
+
+躲兵 v0.2（檔名沿用 hide_observe）：hide_mode＝observe 時只讀、只記錄，絕不派兵；dry／live 見下。
 
 v0.3（v2.83）：確認有來襲之後、算 plan 之前，讀 Sheet「Oases」分頁換掉 dispatch.OASES／BLOCKED（oasis_store.refresh，
-  allow_scan=False：有來襲時只讀、不掃）；Sheet 沒資料、沒有 gspread 或任何失敗都只印 log、沿用 dispatch.py 內建清單。其餘行為不變。
+  allow_scan=False：有來襲時只讀、不掃）；Sheet 沒資料、沒有 gspread 或任何失敗都只印 log、清單維持原狀（沒有內建清單）。其餘行為不變。
 
 v0.2（v2.80）：
   - hide_mode 新增 dry（走到確認頁、不按確認）與 live（核對通過才按確認）；observe 行為不變（仍是 plan、動作「躲兵觀察」）。
@@ -75,6 +77,9 @@ def observe(page, base, d1, *, mode="observe", log=None, save_dir="debug_html", 
     if run_mode == "live" and dry_run:
         print("[躲兵] DRY_RUN 環境：live 降成 dry，不會按確認")
         run_mode = "dry"
+    if dispatch.HOME is None:
+        print("[躲兵] 家座標未知（頁面讀不到、Config 也沒填 home_x／home_y），略過")
+        return None
     try:
         n_sym = HT.incoming_symbols(d1)["amount"]
         n_pages = None
@@ -87,11 +92,11 @@ def observe(page, base, d1, *, mode="observe", log=None, save_dir="debug_html", 
             print("[躲兵觀察] 沒有來襲")
             return None
 
-        try:                                                    # 有來襲才讀 Sheet「Oases」換掉內建清單；不在這時候掃（省時間）
+        try:                                                    # 有來襲才讀 Sheet「Oases」換掉 dispatch.OASES/BLOCKED；不在這時候掃（省時間）
             import oasis_store
             oasis_store.refresh(page, base, allow_scan=False)
         except Exception as e:                                  # noqa: BLE001
-            print(f"[躲兵] 綠洲清單載入失敗，沿用內建清單：{e!r}")
+            print(f"[躲兵] 綠洲清單載入失敗，清單維持原狀：{e!r}")
 
         saved = {}
 

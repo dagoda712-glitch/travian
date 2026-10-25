@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""派兵計算器 v1.6：搶空綠洲讓兵避難（只做計算，不會自動操作遊戲）
+"""派兵計算器 v1.8：搶空綠洲讓兵避難（只做計算，不會自動操作遊戲）
+
+v1.8 變更（通用版）：程式裡不再寫死任何家座標或綠洲清單。HOME 預設 None（＝未知），由 configure(home=...) 在執行時設定
+（travian_ci_run 從 dorf1 頁面讀目前村莊座標，讀不到才退回 Config 的 home_x／home_y）。內建 OASES／BLOCKED、BUILTIN_HOME、
+舊伺服器快照全部刪除；OASES／BLOCKED 一開始是空的，只由 oasis_store.apply（Sheet「Oases」分頁／掃描）填入。
+家改變（configure 傳入不同座標）→ OASES／BLOCKED 立刻清空，避免拿別的家的清單。HOME 是 None 時 plan() 直接拋 ValueError。
+CLI 新增 --home X,Y。
 
 v1.7 變更（v2.86）：內建 OASES／BLOCKED 只在家＝(-28|-72) 時有效；configure(home=其他座標) 會把它們清空（埃及人舊伺服器那邊
 曾因退回內建清單而拿新伺服器的座標去驗證，全部「不安全」）。清空後沒有候選綠洲，hide_troops 會 skip（no_oasis），不派兵。
@@ -53,7 +59,7 @@ except ImportError:          # Python < 3.9
     ZoneInfo = None
 
 MAP_SIZE = 401                      # 座標 -200..200（新伺服器先設定一樣 ✗）
-HOME = (-28, -72)                   # 新伺服器（2026-10-24）。Config home_x／home_y 會覆寫
+HOME = None                         # (x, y)；None＝未知。由 configure(home=...) 設定，沒有預設值
 
 
 def configure(home=None, map_size=None, tribe=None, read_state=None):
@@ -66,16 +72,15 @@ def configure(home=None, map_size=None, tribe=None, read_state=None):
             raise ValueError(f"map_size 必須是奇數且 >= 3：{map_size!r}")
         MAP_SIZE = int(map_size)
     if home is not None:
-        HOME = (int(home[0]), int(home[1]))
-        if HOME == BUILTIN_HOME:
-            OASES[:] = _BUILTIN_OASES
-            BLOCKED.clear()
-            BLOCKED.update(_BUILTIN_BLOCKED)
-        else:
-            if OASES:
-                print(f"[設定] 家 {HOME} 不是內建清單的家 {BUILTIN_HOME}：內建綠洲清單作廢，只用掃描結果")
+        new_home = (int(home[0]), int(home[1]))
+        h = _half()
+        if not (-h <= new_home[0] <= h and -h <= new_home[1] <= h):
+            raise ValueError(f"家座標 {new_home} 超出地圖範圍 ±{h}")
+        if new_home != HOME and (OASES or BLOCKED):
+            print(f"[設定] 家改成 {new_home}（原本 {HOME}）：綠洲清單作廢，等重新載入／掃描")
             OASES.clear()
             BLOCKED.clear()
+        HOME = new_home
     if tribe is not None:
         raw = tribe_from_state(read_state) if str(tribe).strip().lower() == "auto" else tribe
         key = resolve_tribe(raw)
@@ -209,62 +214,10 @@ def tribe_from_state(read_rows=None):
 
 _apply_tribe("egyptians", "default")      # 沒人呼叫 configure 時的舊預設（與 v1.5 相同）
 
-# ── 舊伺服器（家 (-196|172)）的快照，換伺服器後作廢，只留作格式參考，程式不再使用 ──
-OASES_OLD_SERVER = [
-    ((-200, 171), "磚 25%", True),
-    ((-190, 174), "鐵 25%", True),
-    ((-189, 170), "磚＋穀", True),
-    ((-189, 178), "磚＋穀", True),
-    ((-190, 180), "鐵 25%", True),
-    ((-185, 172), "鐵 25%", True),
-    ((-185, 173), "鐵＋穀", True),
-    ((-184, 173), "鐵＋穀", True),
-    ((-181, 170), "磚 25%", True),
-    ((-180, 172), "穀 25%", True),
-    ((-180, 173), "穀 25%", True),
-    ((-180, 174), "穀 25%", True),
-    # 10-22 區塊 JSON 快照（未佔領、無動物）
-    ((-198, 180), "木 25%", True),
-    ((-200, 180), "磚＋穀 25%", True),
-    ((197, 179), "磚 25%（環繞）", True),
-    ((195, 178), "木 25%（環繞）", True),
-    # 你手動送過，但動物／佔領狀態沒有資料
-    ((-196, 167), "荒廢綠洲", False),
-]
-
-BLOCKED_OLD_SERVER = {
-    (-187, 175), (-191, 171), (-181, 173), (-179, 173), (-184, 172),
-    (-183, 168), (-190, 167), (-179, 169), (-179, 167),            # 有動物
-    (-181, 172), (-178, 167), (-176, 167), (-178, 165),            # 動物很多
-    (-178, 175), (-176, 175), (-184, 166), (-186, 164), (-187, 164),
-    (-179, 166), (-178, 166), (-179, 165),                         # 已被佔領
-    (-199, 172), (-199, 170), (-199, 168), (-188, 177),            # 附近村莊
-    (199, 174), (196, 179), (198, 178), (194, 176),                # 動物（10-22）
-    (194, 179), (194, 172),                                        # 已被佔領（10-22）
-}
-
-
-# 候選空綠洲：(座標, 加成, 已驗證)。已驗證＝區塊 JSON 快照「未佔領、無動物」（日期不明，你 10-24 貼的；
-# 加成 r3＝鐵、r2＝磚是依 Travian 慣例 △）。人工快照，發兵前一定會即時驗證 tile-details。
-# 之後由綠洲掃描（oasis_scan.py）取代。
-OASES = [
-    ((-29, -71), "鐵 25%", True),
-    ((-23, -69), "鐵 25%", True),
-    ((-22, -75), "磚 25%", True),
-    ((-21, -75), "鐵 25%", True),
-]
-
-# 不要派去的地方（動物或已被佔領；同一份區塊 JSON）。程式會直接排除。
-BLOCKED = {
-    (-25, -70), (-23, -70), (-21, -74),                            # 有動物
-    (-20, -70), (-21, -71), (-22, -72), (-25, -74), (-20, -75),    # 已被佔領
-}
-
-# 內建清單只對「這個家」有效（v1.7）：它們是新伺服器、家 (-28|-72) 附近的座標。家不是這個座標（例如另一個伺服器的
-# 帳號）時，configure(home=...) 會把 OASES／BLOCKED 清空，不拿別的伺服器的座標去驗證或派兵；之後只有掃描結果（oasis_store.apply）會填。
-BUILTIN_HOME = (-28, -72)
-_BUILTIN_OASES = list(OASES)
-_BUILTIN_BLOCKED = set(BLOCKED)
+# 候選空綠洲：(座標, 加成, 已驗證)；不帶任何內建值。由 oasis_store.apply 就地更新（OASES[:] = ...、BLOCKED.update(...)）。
+# 發兵前一定會即時驗證 tile-details。
+OASES = []
+BLOCKED = set()
 
 
 def wrap_delta(a, b):
@@ -301,6 +254,8 @@ def plan(now, arrivals, speed, margin=30, home=None, oases=None, blocked=None):
     """純函式。回傳依距離排序的列（dict）。
     現在發兵：離開 now～返回 back。a 被撐過＝ now < a < back - margin。"""
     home = HOME if home is None else home
+    if home is None:
+        raise ValueError("家座標未知（HOME is None）：請先 configure(home=...)")
     oases = OASES if oases is None else oases
     blocked = BLOCKED if blocked is None else blocked
     arrivals = sorted(arrivals)
@@ -330,7 +285,7 @@ def recommend(rows, include_unverified=False):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="派兵計算器 v1.6")
+    ap = argparse.ArgumentParser(description="派兵計算器 v1.8")
     ap.add_argument("-a", "--arrival", action="append", required=True,
                     help="來襲到達時間 HH:MM:SS（可重複）")
     ap.add_argument("-s", "--speed", type=float,
@@ -340,11 +295,19 @@ def main():
     ap.add_argument("--tribe", help="族群名稱（例：高盧）或 auto（讀 Sheet state 分頁）；省略＝舊預設（埃及人表）")
     ap.add_argument("--server-speed", type=float, default=1.0)
     ap.add_argument("--margin", type=int, default=30)
+    ap.add_argument("--home", help="我的村莊座標 X,Y（例：-196,172）；必填")
     ap.add_argument("--now", help="現在伺服器時間 HH:MM:SS")
     ap.add_argument("--include-unverified", action="store_true")
     args = ap.parse_args()
     if args.tribe:
         configure(tribe=args.tribe)
+    if not args.home:
+        ap.error("請用 --home X,Y 指定村莊座標（程式內不再有預設家）")
+    try:
+        hx, hy = (int(v.replace("\u2212", "-")) for v in args.home.split(","))
+        configure(home=(hx, hy))
+    except ValueError as e:
+        ap.error(f"--home 格式不對（要 X,Y 兩個整數，且在地圖範圍內）：{e}")
     if args.speed is None and not args.unit:
         ap.error("請用 -s 指定速度，或用 --unit 指定兵種")
     bad = [u for u in (args.unit or []) if u not in UNIT_SPEED]

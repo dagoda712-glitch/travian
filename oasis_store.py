@@ -1,4 +1,6 @@
-"""綠洲掃描 v0.2：抓區塊 → 解析（oasis_scan）→ 存 Sheet「Oases」分頁 → 套用到 dispatch.OASES／BLOCKED。
+"""綠洲掃描 v0.3（v2.96）：dispatch.HOME 是 None → scan／save／refresh 一律不動；沒有內建清單可退回（apply 沒結果就保持空清單）。
+
+綠洲掃描 v0.2：抓區塊 → 解析（oasis_scan）→ 存 Sheet「Oases」分頁 → 套用到 dispatch.OASES／BLOCKED。
 
 v0.2（v2.86）：Oases 分頁多存「中心x、中心y」（這次掃描的中心＝當時的家）。載入時核對：中心不等於現在的家、或舊格式沒有中心欄
 → 不採用；有來襲那輪（allow_scan=False）只放棄、不掃，建城後那次（allow_scan=True）才重掃。避免換伺服器／換帳號後
@@ -7,7 +9,7 @@ v0.2（v2.86）：Oases 分頁多存「中心x、中心y」（這次掃描的中
 v0.1（v2.83）：
 抓區塊的請求（✓ v2.84 新伺服器 Actions 跑通）：POST /api/v1/map/position，body 為 {"data": {x, y, zoomLevel, ignorePositions}}；
 一次回傳 11×9 格；OASIS_ENDPOINT／OASIS_ZOOM 環境變數可覆寫。
-任何失敗都只印 log、回 False，不影響建城／躲兵（家等於 dispatch.BUILTIN_HOME 時躲兵退回 dispatch.py 的內建清單，否則沒有候選、不派兵）。
+任何失敗都只印 log、回 False，不影響建城／躲兵（沒有清單＝沒有候選＝躲兵不派兵）。
 """
 import json
 import math
@@ -55,6 +57,8 @@ def _span(tiles):
 def scan(page, base, radius=15, max_requests=30, fetch=fetch_block, pause=0.5):
     """以家為中心掃 radius 格內的綠洲。第一次請求量出一次回傳涵蓋多大，再依此排格子（不寫死 11×9）。
     回傳 oasis_scan.parse_tiles 的 list（依座標去重）。"""
+    if dispatch.HOME is None:
+        raise RuntimeError("家座標未知，不掃描")
     hx, hy = dispatch.HOME
     first = fetch(page, base, hx, hy)
     w, h = _span(first.get("tiles", []))
@@ -95,6 +99,8 @@ def save(oases, now=None, center=None):
     if ws is None:
         return False
     now = now or _utc()
+    if center is None and dispatch.HOME is None:
+        raise RuntimeError("家座標未知，不寫入")
     cx, cy = center or dispatch.HOME
     rows = [[o["pos"][0], o["pos"][1], o["kind"], o["bonus"],
              json.dumps(o["animals"]), o["owner"] or "", now, cx, cy] for o in sorted(oases, key=lambda o: o["pos"])]
@@ -128,10 +134,10 @@ def load():
 
 # ───────── 套用 ─────────
 def apply(oases, max_dist=40):
-    """把掃描結果換進 dispatch.OASES／BLOCKED。結果是空的就不動（保留 dispatch.py 內建清單）。"""
+    """把掃描結果換進 dispatch.OASES／BLOCKED。結果是空的就不動（沒有內建清單，保持原狀）。"""
     cand = oasis_scan.free_candidates(oases, max_dist=max_dist)
     if not cand:
-        print("[綠洲掃描] 沒有可用候選，沿用 dispatch.py 內建清單")
+        print("[綠洲掃描] 沒有可用候選，清單維持原狀")
         return False
     dispatch.OASES[:] = cand
     dispatch.BLOCKED.clear()
@@ -144,6 +150,9 @@ def refresh(page, base, *, max_age_h=12, allow_scan=True, radius=15):
     """每輪呼叫一次：Sheet 的資料夠新、而且掃描中心就是現在的家，才直接套用；否則（太舊／沒有／中心不符／沒記錄中心）
     且 allow_scan 才去掃。中心不符或沒記錄時，allow_scan=False 一律不套用（避免用到別的伺服器或別的家的資料）。
     永遠不拋例外。"""
+    if dispatch.HOME is None:
+        print("[綠洲掃描] 家座標未知，略過")
+        return False
     try:
         oases, age, center = load()
         mine = center == tuple(dispatch.HOME)
@@ -160,5 +169,5 @@ def refresh(page, base, *, max_age_h=12, allow_scan=True, radius=15):
             print(f"[綠洲掃描] 寫 Sheet 失敗（仍套用本輪結果）：{e!r}")
         return apply(oases)
     except Exception as e:                              # noqa: BLE001
-        print(f"[綠洲掃描] 失敗，沿用內建清單：{e!r}")
+        print(f"[綠洲掃描] 失敗，清單維持原狀：{e!r}")
         return False

@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-GitHub Actions 用的「Playwright 版」自動升級資源田（v2.6：躲兵接 dry／live）。
+GitHub Actions 用的「Playwright 版」自動升級資源田（v2.10：家座標從頁面讀）。
+
+v2.10（v2.96）：不再用 Config 的 home_x／home_y 當家。session 確認有效、拿到 dorf1 之後，用 travian_pages.resolve_home
+從頁面（viewData＋側欄）讀目前村莊座標，再 dispatch.configure(home=…)；頁面讀不到才退回 Config 的 home_x／home_y
+（只是備用）；兩者都沒有 → 本輪不躲兵。dispatch 沒有任何預設家或內建綠洲清單。
 
 v2.1：修正 title 被前端 JS 清空導致成本解析失敗的問題。get_html() 會在「這一頁抓到的
 所有田成本都是空的」時，改用 context.request.get() 發一個不經過瀏覽器渲染、不執行任何
@@ -32,7 +36,7 @@ v2.9：取得 cfg 後 dispatch.configure(tribe="auto")：兵種表（速度／�
 不再寫死埃及人；讀不到或不認得的族群 → 表清空 → 躲兵因「兵種速度未知」不動（印 log）。
 
 v2.8：每輪最後呼叫 oasis_store.refresh：Sheet「Oases」分頁超過 12 小時才重掃區塊並寫回，其餘輪只讀一次 Sheet；
-有來襲時 hide_observe 讀這份清單套用到 dispatch.OASES／BLOCKED（讀不到就沿用 dispatch.py 內建清單）。
+有來襲時 hide_observe 讀這份清單套用到 dispatch.OASES／BLOCKED（讀不到就維持空清單，躲兵不派兵）。
 
 v2.7（v2.82，換伺服器）：家座標與地圖大小改由 Config 的 home_x／home_y／map_size 提供（預設 -28／-72／401），
 取得 cfg 後立刻 dispatch.configure；Config 填壞會用預設，並印出實際採用的值。
@@ -97,12 +101,11 @@ def main() -> int:
     if cfg is None:
         return code
     dry = os.getenv("DRY_RUN", "1") != "0"
-    dispatch.configure(home=(cfg.get("home_x", dispatch.HOME[0]), cfg.get("home_y", dispatch.HOME[1])))
     try:
         dispatch.configure(map_size=cfg.get("map_size", dispatch.MAP_SIZE))
     except ValueError as e:
         print(f"[設定] Config 的 map_size 不合法，改用預設 {dispatch.MAP_SIZE}：{e}")
-    print(f"[設定] 家 ({dispatch.HOME[0]}|{dispatch.HOME[1]})、地圖邊長 {dispatch.MAP_SIZE}")
+    print(f"[設定] 地圖邊長 {dispatch.MAP_SIZE}（家座標等 dorf1 載入後從頁面讀）")
     dispatch.configure(tribe="auto")      # 讀 Sheet「state」的 tribe 欄決定兵種表；讀不到就清空（躲兵不動，不會用錯表）
 
     with sync_playwright() as p:
@@ -223,6 +226,15 @@ def main() -> int:
             context.storage_state(path=str(STATE_PATH))
             browser.close()
             return 0
+
+        # 家：從剛載入的 dorf1 讀目前村莊座標（頁面優先，Config 備用）；失敗不影響建城
+        try:
+            home, note = P.resolve_home(d1, (cfg.get("home_x"), cfg.get("home_y")), dispatch.MAP_SIZE)
+            print(f"[設定] {note}")
+            if home is not None:
+                dispatch.configure(home=home)
+        except Exception as e:                 # noqa: BLE001
+            print(f"[設定] 決定家座標失敗，本輪不躲兵：{e!r}")
 
         # 躲兵「只觀察」：只讀、只記錄、不派兵；沒有來襲時不多打任何請求；任何例外都不影響建城
         if HO is not None:

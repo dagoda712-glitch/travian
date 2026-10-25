@@ -164,8 +164,8 @@ _CONFIG_NOTES = {
     "hide_mode": "躲兵：off／observe／dry／live。observe = 有來襲時只讀、只記錄（動作「躲兵觀察」），絕不派兵；dry = 走到確認頁、核對後不按確認；live = 核對通過才按確認派兵（DRY_RUN 測試環境下 live 會降成 dry）；off = 完全不做（看不懂一律當 off）",
     "hide_min_attack": "躲兵派出兵力的攻擊力合計必須「大於」這個數字（整數，預設 20；t1＝10、t2≈30）；沒列攻擊力的兵種算 0",
     "hide_wait_max_s": "躲兵 dry／live：自己的兵在幾秒內歸來、而且歸來後下一波還來得及，就等到歸來再派（整數秒，預設 180；0＝不等；observe 不等）",
-    "home_x": "我的村莊座標 X（整數，可為負；預設 -28。換伺服器改這裡，不用改程式）",
-    "home_y": "我的村莊座標 Y（整數，可為負；預設 -72）",
+    "home_x": "備用：我的村莊座標 X（整數，可為負；預設空白）。bot 平常從 dorf1 頁面自動讀目前村莊座標，只有頁面讀不到才用這裡",
+    "home_y": "備用：我的村莊座標 Y（同上）",
     "map_size": "地圖邊長（奇數，預設 401＝座標 -200..200；距離環繞與預填網址 id 都用它）",
 }
 
@@ -180,7 +180,7 @@ def _default_cfg() -> dict:
             "hero_guard_mode": "off", "hero_guard_hidden": 2000,
             "fill_in_mode": "off", "fill_in_slack_min": 0,
             "hide_mode": "observe", "hide_min_attack": 20, "hide_wait_max_s": 180,
-            "home_x": -28, "home_y": -72, "map_size": 401}
+            "home_x": None, "home_y": None, "map_size": 401}
 
 
 def _cfg_cell(v) -> str:

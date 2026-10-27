@@ -137,7 +137,7 @@ _CONFIG_ORDER = ("enabled", "target_level", "queue_slots", "is_capital",
                  "hero_focus_mode", "hero_focus_min_hours", "hero_hard_min_health",
                  "hero_guard_mode", "hero_guard_hidden", "fill_in_mode", "fill_in_slack_min",
                  "hide_mode", "hide_min_attack", "hide_wait_max_s",
-                 "home_x", "home_y", "map_size")
+                 "home_x", "home_y", "map_size", "village_id")
 _CONFIG_NOTES = {
     "enabled": "FALSE = 緊急停止；session 失效時程式也會改成 FALSE",
     "target_level": "資源田升到幾級（沒設 build_order 時使用）",
@@ -167,6 +167,7 @@ _CONFIG_NOTES = {
     "home_x": "備用：我的村莊座標 X（整數，可為負；預設空白）。bot 平常從 dorf1 頁面自動讀目前村莊座標，只有頁面讀不到才用這裡",
     "home_y": "備用：我的村莊座標 Y（同上）",
     "map_size": "地圖邊長（奇數，預設 401＝座標 -200..200；距離環繞與預填網址 id 都用它）",
+    "village_id": "村莊鎖定：bot 只操作這個村莊（填村莊 did，整數；側欄村莊連結 ?newdid= 後面那串）。每輪先核對目前村莊、不是就切過去；留空＝不鎖定（單村用）",
 }
 
 
@@ -180,7 +181,7 @@ def _default_cfg() -> dict:
             "hero_guard_mode": "off", "hero_guard_hidden": 2000,
             "fill_in_mode": "off", "fill_in_slack_min": 0,
             "hide_mode": "observe", "hide_min_attack": 20, "hide_wait_max_s": 180,
-            "home_x": None, "home_y": None, "map_size": 401}
+            "home_x": None, "home_y": None, "map_size": 401, "village_id": None}
 
 
 def _cfg_cell(v) -> str:
@@ -259,7 +260,8 @@ def load_config() -> dict:
         elif k in ("target_level", "queue_slots", "max_builds", "target_building_level",
                    "hero_min_health", "hero_transfer_min", "hero_transfer_max_gap",
                    "hero_transfer_eta_min", "hero_focus_min_hours", "hero_hard_min_health",
-                   "hero_guard_hidden", "fill_in_slack_min", "hide_min_attack", "hide_wait_max_s") and v.isdigit():
+                   "hero_guard_hidden", "fill_in_slack_min", "hide_min_attack", "hide_wait_max_s",
+                   "village_id") and v.isdigit():
             cfg[k] = int(v)
         elif k in ("home_x", "home_y", "map_size"):
             try:

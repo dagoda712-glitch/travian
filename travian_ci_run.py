@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-GitHub Actions 用的「Playwright 版」自動升級資源田（v2.10：家座標從頁面讀）。
+GitHub Actions 用的「Playwright 版」自動升級資源田（v2.11：村莊鎖定）。
+
+v2.11（v3.00）：村莊鎖定。Config 的 village_id（村莊 did，整數）有填時，session 確認有效、拿到 dorf1 後，先核對「目前村莊」
+是不是它；不是就請求 dorf1.php?newdid=<did> 切過去、再讀一次核對；仍不符 → 本輪不動、結束碼 1（讓 GitHub 寄失敗信）。
+切村之後才讀家座標、躲兵、建城，後面的流程全部用切過去的那份 dorf1。village_id 留空＝完全沿用舊行為（單村帳號不受影響）。
+目前村莊 did 的來源：側欄 div.listEntry.village.active 的 data-did 與內嵌 viewData.ownPlayer.village.id，兩處不一致一律當讀不到。
+
+v2.10（v2.96）：家座標從頁面讀。
 
 v2.10（v2.96）：不再用 Config 的 home_x／home_y 當家。session 確認有效、拿到 dorf1 之後，用 travian_pages.resolve_home
 從頁面（viewData＋側欄）讀目前村莊座標，再 dispatch.configure(home=…)；頁面讀不到才退回 Config 的 home_x／home_y
@@ -50,6 +57,7 @@ v2.6：躲兵接上 dry／live（hide_mode＝observe／dry／live；預設仍是
 環境變數：跟 v2 完全相同，見 SETUP.md
 """
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -83,6 +91,27 @@ def parse_cookie_header(header: str, url: str) -> list:
         name, value = part.split("=", 1)
         cookies.append({"name": name.strip(), "value": value.strip(), "url": url})
     return cookies
+
+
+_VIEWDATA_DID = re.compile(r'"ownPlayer":\{.*?"village":\{"id":(\d+)', re.S)
+
+
+def active_did(html: str):
+    """從 dorf1／dorf2 頁面讀「目前村莊」的 did（int）。來源：側欄 active 那列的 data-did、內嵌 viewData 的
+    ownPlayer.village.id。兩處都讀到卻不一致、或都讀不到 → None（呼叫端一律當「不確定」處理）。"""
+    side = None
+    try:
+        from bs4 import BeautifulSoup
+        el = BeautifulSoup(html, "lxml").select_one("div.listEntry.village.active[data-did]")
+        if el is not None and str(el.get("data-did", "")).isdigit():
+            side = int(el["data-did"])
+    except Exception:                                  # noqa: BLE001
+        side = None
+    m = _VIEWDATA_DID.search(html)
+    view = int(m.group(1)) if m else None
+    if side is not None and view is not None and side != view:
+        return None
+    return side if side is not None else view
 
 
 def main() -> int:
@@ -226,6 +255,21 @@ def main() -> int:
             context.storage_state(path=str(STATE_PATH))
             browser.close()
             return 0
+
+        # 村莊鎖定（v2.11）：village_id 有填才做；之後的家座標、躲兵、建城全部用鎖定村的 dorf1
+        target_did = cfg.get("village_id")
+        if target_did:
+            cur = active_did(d1)
+            if cur != target_did:
+                print(f"[村莊鎖定] 目前村莊 {cur}，目標 {target_did}，切換（dorf1.php?newdid={target_did}）")
+                d1 = get_html(f"dorf1.php?newdid={target_did}", need_cost=True)
+                cur = active_did(d1)
+            if cur != target_did:
+                print(f"[村莊鎖定] 切換後目前村莊仍是 {cur}（目標 {target_did}）→ 本輪不動作")
+                context.storage_state(path=str(STATE_PATH))
+                browser.close()
+                return 1
+            print(f"[村莊鎖定] 目前村莊 {cur}＝目標，繼續")
 
         # 家：從剛載入的 dorf1 讀目前村莊座標（頁面優先，Config 備用）；失敗不影響建城
         try:
